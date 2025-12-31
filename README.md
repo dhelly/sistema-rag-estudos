@@ -2,7 +2,9 @@
 
 > Sistema de estudos adaptativo baseado em IA com questões estilo CESPE, análise Pareto (80/20) e suporte a múltiplos provedores de IA.
 
-[![PHP Version](https://img.shields.io/badge/PHP-8.0%2B-blue)](https://www.php.net/)
+> Feito com uso de IA
+
+[![PHP Version](https://img.shields.io/badge/PHP-8.5%2B-blue)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Produção-success)](https://github.com)
 
@@ -126,7 +128,7 @@ php -m | grep curl                        # cURL instalado?
 
 ### 1. Clone o repositório
 ```bash
-git clone https://github.com/seu-usuario/sistema-rag-estudos.git
+git clone https://github.com/dhelly/sistema-rag-estudos.git
 cd sistema-rag-estudos
 ```
 
@@ -487,7 +489,7 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 
 ## 👥 Autores
 
-- **Seu Nome** - *Trabalho Inicial* - [GitHub](https://github.com/seu-usuario)
+- **Seu Nome** - *Trabalho Inicial* - [GitHub](https://github.com/dhelly)
 
 ---
 
@@ -504,9 +506,7 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 
 ## 📞 Suporte
 
-- 📧 Email: seu-email@exemplo.com
-- 💬 Issues: [GitHub Issues](https://github.com/seu-usuario/sistema-rag-estudos/issues)
-- 📖 Docs: [Wiki do Projeto](https://github.com/seu-usuario/sistema-rag-estudos/wiki)
+- 💬 Issues: [GitHub Issues](https://github.com/dhelly/sistema-rag-estudos/issues)
 
 ---
 
