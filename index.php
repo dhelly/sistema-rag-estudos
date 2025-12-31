@@ -1,18 +1,21 @@
 <?php
 /**
- * ARQUIVO 4 de 4: index.php
+ * ARQUIVO 5 de 6: index.php (CORRIGIDO)
  * 
  * Salve este arquivo como: index.php
  * Este é o arquivo principal da aplicação
  */
 
-session_start();
 require_once 'config.php';
+require_once 'auth.php';
 require_once 'database.php';
 require_once 'api.php';
 
+// Requer login
+Auth::requireLogin();
+
 $db = new Database();
-$api = new AnthropicAPI();
+$api = new UnifiedAI();
 
 // Processar ações
 $action = $_GET['action'] ?? '';
@@ -22,6 +25,21 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         switch ($action) {
+            case 'change_provider':
+                if (isset($_POST['provider'])) {
+                    $provider = $_POST['provider'];
+                    $availableProviders = array_keys(getAvailableProviders());
+                    
+                    if (in_array($provider, $availableProviders)) {
+                        setCurrentProvider($provider);
+                        $api = new UnifiedAI($provider);
+                        $message = "Provedor alterado para: " . getProviderConfig($provider)['name'];
+                    } else {
+                        throw new Exception("Provedor inválido ou não configurado!");
+                    }
+                }
+                break;
+                
             case 'upload':
                 if (isset($_FILES['pdf']) && $_FILES['pdf']['error'] === UPLOAD_ERR_OK) {
                     $pdfName = basename($_FILES['pdf']['name']);
@@ -206,10 +224,38 @@ if (isset($_SESSION['last_answer'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inútil(inutil.app) - Sistema RAG de Estudos Inteligente</title>
+    <title>Sistema RAG de Estudos Inteligente</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 min-h-screen p-4">
+    
+    <!-- Header com Info do Usuário -->
+    <div class="max-w-4xl mx-auto mb-4">
+        <div class="bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 flex justify-between items-center text-white text-sm">
+            <div class="flex items-center gap-4">
+                <span>👤 <?= htmlspecialchars(Auth::getUsername()) ?></span>
+                <span>⏱️ <?= Auth::getSessionDuration() ?></span>
+                
+                <!-- Seletor de Provedor -->
+                <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2">
+                    <span>🤖</span>
+                    <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50">
+                        <?php foreach (getAvailableProviders() as $key => $name): ?>
+                            <option value="<?= $key ?>" <?= getCurrentProvider() === $key ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($name) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </form>
+            </div>
+            
+            <form method="POST" action="logout.php" class="inline">
+                <button type="submit" class="px-3 py-1 bg-red-500/80 hover:bg-red-600 rounded transition-colors">
+                    Sair →
+                </button>
+            </form>
+        </div>
+    </div>
     
     <div class="max-w-4xl mx-auto">
         <?php if ($message): ?>
@@ -230,9 +276,8 @@ if (isset($_SESSION['last_answer'])) {
                 <div class="text-center mb-8">
                     <div class="text-6xl mb-4">🧠</div>
                     <h1 class="text-3xl font-bold text-gray-800 mb-2">
-                        Sistema RAG de Quiz de Estudos Inteligente 
+                        Sistema RAG de Estudos Inteligente
                     </h1>
-                    
                     <p class="text-gray-600">
                         Baseado no Princípio de Pareto (80/20) com questões adaptativas estilo CESPE
                     </p>
@@ -260,6 +305,9 @@ if (isset($_SESSION['last_answer'])) {
                         </label>
                         <p class="text-sm text-gray-500 mt-2">
                             O sistema identificará os 20% mais importantes do conteúdo
+                        </p>
+                        <p class="text-xs text-orange-600 mt-2">
+                            ⚠️ Disponível apenas com Anthropic Claude
                         </p>
                     </form>
                 </div>
@@ -472,7 +520,7 @@ Tópico 2: Direitos e Garantias Fundamentais
         
         <div class="text-center text-white mt-8 pb-4">
             <p class="text-sm opacity-75">
-                Inútil(inutil.app) - Sistema RAG com IA • Princípio de Pareto (80/20) • Questões Adaptativas CESPE
+                Sistema RAG com IA • Princípio de Pareto (80/20) • Questões Adaptativas CESPE
             </p>
         </div>
     </div>
