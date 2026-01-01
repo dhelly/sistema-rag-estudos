@@ -260,7 +260,7 @@ if (isset($_SESSION['last_answer'])) {
                 <!-- Seletor de Provedor -->
                 <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2">
                     <span>🤖</span>
-                    <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50">
+                    <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 [&_option]:text-black [&_option]:bg-white">
                         <?php foreach (getAvailableProviders() as $key => $name): ?>
                             <option value="<?= $key ?>" <?= getCurrentProvider() === $key ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($name) ?>
