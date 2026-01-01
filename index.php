@@ -188,8 +188,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
                 
             case 'reset':
-                session_destroy();
-                session_start();
+                // Salvar dados de login antes de limpar
+                $username = $_SESSION['username'] ?? null;
+                $loginTime = $_SESSION['login_time'] ?? null;
+                $lastActivity = $_SESSION['last_activity'] ?? null;
+                $loggedIn = $_SESSION['logged_in'] ?? null;
+                $aiProvider = $_SESSION['ai_provider'] ?? null;
+                
+                // Limpar apenas dados da sessão de estudo
+                unset($_SESSION['session_id']);
+                unset($_SESSION['current_question']);
+                unset($_SESSION['last_answer']);
+                
+                // Restaurar dados de login
+                if ($loggedIn) {
+                    $_SESSION['logged_in'] = $loggedIn;
+                    $_SESSION['username'] = $username;
+                    $_SESSION['login_time'] = $loginTime;
+                    $_SESSION['last_activity'] = time(); // Atualiza atividade
+                    if ($aiProvider) {
+                        $_SESSION['ai_provider'] = $aiProvider;
+                    }
+                }
+                
                 header('Location: index.php');
                 exit;
         }
