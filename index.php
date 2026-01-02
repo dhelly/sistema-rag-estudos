@@ -524,7 +524,7 @@ Tópico 2: Direitos e Garantias Fundamentais
                 <?php elseif ($lastAnswer): ?>
                     <div>
                         <div class="p-6 rounded-xl mb-4 <?= $lastAnswer['correct'] ? 'bg-green-50 border-2 border-green-200' : 'bg-red-50 border-2 border-red-200' ?>">
-                            <p class="text-sm leading-relaxed text-gray-700">
+                            <p class="text-lg leading-relaxed text-gray-700">
                                 <strong><?= $lastAnswer['correct'] ? '✓ CORRETO!' : '✗ ERRADO.' ?></strong><br>
                                 <?= htmlspecialchars($lastAnswer['explanation']) ?>
                             </p>
