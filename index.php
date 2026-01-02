@@ -10,6 +10,7 @@ require_once 'config.php';
 require_once 'auth.php';
 require_once 'database.php';
 require_once 'api.php';
+require_once 'challenge_agent.php';
 
 // Requer login
 Auth::requireLogin();
@@ -17,17 +18,17 @@ Auth::requireLogin();
 $db = new Database();
 $api = new UnifiedAI();
 
-// Processar ações
-$action = $_GET['action'] ?? '';
-$message = '';
-$error = '';
-
+// Verificar user_id
 if (!isset($_SESSION['user_id'])) {
     header('Location: login.php');
     exit();
 }
+$userId = $_SESSION['user_id'];
 
-$user_id = $_SESSION['user_id'];
+// Processar ações
+$action = $_GET['action'] ?? '';
+$message = '';
+$error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -69,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     
                     // Criar sessão
-                    $sessionId = $db->createSession($user_id, $pdfName, $extractedText, $analysis['coreTopics']);
+                    $sessionId = $db->createSession($userId, $pdfName, $extractedText, $analysis['coreTopics']);
                     $_SESSION['session_id'] = $sessionId;
                     
                     $message = "PDF processado com sucesso: {$pdfName}";
@@ -93,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     
                     // Criar sessão com o conteúdo resumido
-                    $sessionId = $db->createSession($user_id, $materialName, $summaryText, $analysis['coreTopics']);
+                    $sessionId = $db->createSession($userId, $materialName, $summaryText, $analysis['coreTopics']);
                     $_SESSION['session_id'] = $sessionId;
                     
                     $message = "Resumo processado com sucesso: {$materialName}";
@@ -142,8 +143,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new Exception("Erro ao gerar questão. Tente novamente.");
                     }
                     
-                    // Salvar questão                    
-                    $questionId = $db->saveQuestion($sessionId, $user_id, $question, $progress['difficulty_level']);
+                    // Salvar questão
+                    $questionId = $db->saveQuestion($sessionId, $userId, $question, $progress['difficulty_level']);
                     $_SESSION['current_question'] = $questionId;
                 }
                 break;
@@ -187,10 +188,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     $_SESSION['last_answer'] = [
                         'correct' => $isCorrect,
-                        'explanation' => $question['explanation']
+                        'explanation' => $question['explanation'],
+                        'question_id' => $questionId,
+                        'correct_answer' => $question['correct_answer']
                     ];
                     
                     unset($_SESSION['current_question']);
+                }
+                break;
+                
+            case 'challenge':
+                if (isset($_POST['question_id']) && isset($_POST['argument'])) {
+                    try {
+                        $questionId = $_POST['question_id'];
+                        $argument = trim($_POST['argument']);
+                        
+                        if (empty($argument)) {
+                            throw new Exception("Por favor, forneça sua argumentação.");
+                        }
+                        
+                        if (strlen($argument) < 20) {
+                            throw new Exception("Sua argumentação deve ter pelo menos 20 caracteres.");
+                        }
+                        
+                        $challengeAgent = new ChallengeAgent();
+                        $result = $challengeAgent->processChallenge($questionId, $userId, $argument);
+                        
+                        $_SESSION['challenge_result'] = $result;
+                        
+                        if ($result['decision'] === 'accepted') {
+                            $message = "✓ Questionamento ACEITO! O gabarito foi corrigido.";
+                        } else {
+                            $message = "O questionamento foi analisado. Veja os detalhes abaixo.";
+                        }
+                        
+                    } catch (Exception $e) {
+                        $error = $e->getMessage();
+                    }
                 }
                 break;
                 
@@ -231,6 +265,7 @@ $session = null;
 $progress = null;
 $currentQuestion = null;
 $lastAnswer = $_SESSION['last_answer'] ?? null;
+$challengeResult = $_SESSION['challenge_result'] ?? null;
 
 if (isset($_SESSION['session_id'])) {
     $session = $db->getSession($_SESSION['session_id']);
@@ -244,6 +279,10 @@ if (isset($_SESSION['session_id'])) {
 // Limpar feedback após exibir
 if (isset($_SESSION['last_answer'])) {
     unset($_SESSION['last_answer']);
+}
+
+if (isset($_SESSION['challenge_result'])) {
+    unset($_SESSION['challenge_result']);
 }
 
 ?>
@@ -536,6 +575,118 @@ Tópico 2: Direitos e Garantias Fundamentais
                                 <?= htmlspecialchars($lastAnswer['explanation']) ?>
                             </p>
                         </div>
+                        
+                        <!-- Botão de Questionamento -->
+                        <?php if (getConfig('ALLOW_QUESTION_CHALLENGE', 'true') === 'true'): ?>
+                            <div class="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded">
+                                <div class="flex items-start gap-3">
+                                    <div class="text-2xl">🤔</div>
+                                    <div class="flex-1">
+                                        <p class="text-sm font-semibold text-yellow-800 mb-2">
+                                            Discorda do gabarito?
+                                        </p>
+                                        <p class="text-xs text-yellow-700 mb-3">
+                                            Nosso Agente Questionador vai pesquisar na internet e verificar sua argumentação.
+                                        </p>
+                                        <button 
+                                            onclick="document.getElementById('challengeForm').classList.toggle('hidden')"
+                                            class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 text-sm font-semibold transition-colors"
+                                        >
+                                            ⚖️ Questionar Gabarito
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Formulário de Questionamento -->
+                                <div id="challengeForm" class="hidden mt-4 pt-4 border-t border-yellow-300">
+                                    <form method="POST" action="?action=challenge">
+                                        <input type="hidden" name="question_id" value="<?= $lastAnswer['question_id'] ?>">
+                                        
+                                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                            Sua Argumentação:
+                                        </label>
+                                        <textarea 
+                                            name="argument" 
+                                            rows="4" 
+                                            required
+                                            minlength="20"
+                                            placeholder="Explique por que você acredita que o gabarito está incorreto. Seja específico e forneça argumentos sólidos..."
+                                            class="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-sm"
+                                        ></textarea>
+                                        
+                                        <div class="flex gap-2 mt-3">
+                                            <button 
+                                                type="submit"
+                                                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold text-sm transition-colors"
+                                            >
+                                                🔍 Enviar para Análise
+                                            </button>
+                                            <button 
+                                                type="button"
+                                                onclick="document.getElementById('challengeForm').classList.add('hidden')"
+                                                class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 font-semibold text-sm transition-colors"
+                                            >
+                                                Cancelar
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <!-- Resultado do Questionamento -->
+                        <?php if ($challengeResult): ?>
+                            <div class="mb-4 p-6 rounded-xl border-2 <?= $challengeResult['decision'] === 'accepted' ? 'bg-green-50 border-green-300' : 'bg-orange-50 border-orange-300' ?>">
+                                <div class="flex items-start gap-3 mb-4">
+                                    <div class="text-3xl"><?= $challengeResult['decision'] === 'accepted' ? '✅' : '📋' ?></div>
+                                    <div>
+                                        <h3 class="font-bold text-lg <?= $challengeResult['decision'] === 'accepted' ? 'text-green-800' : 'text-orange-800' ?> mb-2">
+                                            <?= $challengeResult['decision'] === 'accepted' ? 'Questionamento ACEITO!' : 'Análise do Questionamento' ?>
+                                        </h3>
+                                        <p class="text-sm text-gray-700 leading-relaxed">
+                                            <?= htmlspecialchars($challengeResult['analysis']) ?>
+                                        </p>
+                                    </div>
+                                </div>
+                                
+                                <!-- Fontes Web -->
+                                <?php if (!empty($challengeResult['web_sources'])): ?>
+                                    <div class="mt-4 pt-4 border-t <?= $challengeResult['decision'] === 'accepted' ? 'border-green-200' : 'border-orange-200' ?>">
+                                        <p class="text-xs font-semibold text-gray-600 mb-2">🌐 Fontes consultadas na web:</p>
+                                        <ul class="text-xs text-gray-600 space-y-1">
+                                            <?php 
+                                            $sources = $challengeResult['web_sources'];
+                                            $count = 0;
+                                            foreach ($sources as $key => $source): 
+                                                if ($key === 'tavily_answer' || $count >= 3) continue;
+                                                $count++;
+                                            ?>
+                                                <li>
+                                                    • <a href="<?= htmlspecialchars($source['url']) ?>" target="_blank" class="text-indigo-600 hover:underline">
+                                                        <?= htmlspecialchars($source['title']) ?>
+                                                    </a>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    </div>
+                                <?php endif; ?>
+                                
+                                <!-- Gabarito Atualizado -->
+                                <?php if ($challengeResult['decision'] === 'accepted' && isset($challengeResult['updated_explanation'])): ?>
+                                    <div class="mt-4 pt-4 border-t border-green-200">
+                                        <p class="text-xs font-semibold text-green-800 mb-2">✏️ Gabarito Corrigido:</p>
+                                        <p class="text-sm text-gray-700 bg-white p-3 rounded">
+                                            <strong>Resposta correta:</strong> <?= $challengeResult['updated_answer'] ? 'CERTO' : 'ERRADO' ?><br>
+                                            <?= htmlspecialchars($challengeResult['updated_explanation']) ?>
+                                        </p>
+                                        <p class="text-xs text-green-700 mt-2">
+                                            ℹ️ Suas estatísticas foram recalculadas automaticamente.
+                                        </p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                        
                         <form method="POST" action="?action=generate">
                             <button type="submit" class="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold text-lg hover:shadow-lg transition-all">
                                 Próxima Questão →

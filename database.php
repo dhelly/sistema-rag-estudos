@@ -152,6 +152,29 @@ class Database {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
         
+        // Tabela de questionamentos de gabarito
+        $this->conn->exec("
+            CREATE TABLE IF NOT EXISTS question_challenges (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                user_id INT NOT NULL,
+                user_argument TEXT NOT NULL,
+                ai_analysis TEXT NOT NULL,
+                web_sources JSON DEFAULT NULL,
+                challenge_result ENUM('accepted', 'rejected', 'pending') DEFAULT 'pending',
+                original_answer BOOLEAN NOT NULL,
+                suggested_answer BOOLEAN NULL,
+                original_explanation TEXT NOT NULL,
+                updated_explanation TEXT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMP NULL,
+                FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                INDEX idx_question_user (question_id, user_id),
+                INDEX idx_result (challenge_result)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+        
         // Criar usuário admin padrão se não existir
         $this->createDefaultAdmin();
     }
@@ -491,6 +514,162 @@ class Database {
         $stmt = $this->conn->prepare($sql);
         $stmt->execute($params);
         return $stmt->fetchAll();
+    }
+    
+    // ==========================================
+    // MÉTODOS DE QUESTIONAMENTO
+    // ==========================================
+
+    public function getUsersAffectedByQuestion($questionId) {
+        $stmt = $this->conn->prepare("
+            SELECT DISTINCT user_id, session_id 
+            FROM questions 
+            WHERE id = ?
+        ");
+        $stmt->execute([$questionId]);
+        return $stmt->fetchAll();
+    }
+
+    public function getQuestionChallengesFull($questionId) {
+        $stmt = $this->conn->prepare("
+            SELECT c.*, u.name as user_name, u.email as user_email 
+            FROM question_challenges c 
+            JOIN users u ON c.user_id = u.id 
+            WHERE c.question_id = ? 
+            ORDER BY c.created_at DESC
+        ");
+        $stmt->execute([$questionId]);
+        return $stmt->fetchAll();
+    }
+    
+    public function createChallenge($questionId, $userId, $userArgument, $originalAnswer, $originalExplanation) {
+        $stmt = $this->conn->prepare("
+            INSERT INTO question_challenges 
+            (question_id, user_id, user_argument, ai_analysis, original_answer, original_explanation, challenge_result)
+            VALUES (?, ?, ?, '', ?, ?, 'pending')
+        ");
+        $stmt->execute([
+            $questionId,
+            $userId,
+            $userArgument,
+            $originalAnswer ? 1 : 0,
+            $originalExplanation
+        ]);
+        
+        return $this->conn->lastInsertId();
+    }
+    
+    public function updateChallenge($challengeId, $aiAnalysis, $webSources, $result, $suggestedAnswer = null, $updatedExplanation = null) {
+        $webSourcesJson = json_encode($webSources);
+        
+        if ($this->dbType === 'mysql') {
+            $stmt = $this->conn->prepare("
+                UPDATE question_challenges 
+                SET ai_analysis = ?, 
+                    web_sources = ?,
+                    challenge_result = ?,
+                    suggested_answer = ?,
+                    updated_explanation = ?,
+                    reviewed_at = NOW()
+                WHERE id = ?
+            ");
+        } else {
+            $stmt = $this->conn->prepare("
+                UPDATE question_challenges 
+                SET ai_analysis = ?, 
+                    web_sources = ?,
+                    challenge_result = ?,
+                    suggested_answer = ?,
+                    updated_explanation = ?,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ");
+        }
+        
+        $stmt->execute([
+            $aiAnalysis,
+            $webSourcesJson,
+            $result,
+            $suggestedAnswer !== null ? ($suggestedAnswer ? 1 : 0) : null,
+            $updatedExplanation,
+            $challengeId
+        ]);
+    }
+    
+    public function getChallenge($challengeId) {
+        $stmt = $this->conn->prepare("SELECT * FROM question_challenges WHERE id = ?");
+        $stmt->execute([$challengeId]);
+        $challenge = $stmt->fetch();
+        
+        if ($challenge && $challenge['web_sources']) {
+            $challenge['web_sources'] = json_decode($challenge['web_sources'], true);
+        }
+        
+        return $challenge;
+    }
+    
+    public function getQuestionChallenges($questionId) {
+        $stmt = $this->conn->prepare("
+            SELECT c.*, u.name as user_name, u.email as user_email
+            FROM question_challenges c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.question_id = ?
+            ORDER BY c.created_at DESC
+        ");
+        $stmt->execute([$questionId]);
+        return $stmt->fetchAll();
+    }
+    
+    public function countQuestionChallenges($questionId) {
+        $stmt = $this->conn->prepare("
+            SELECT COUNT(*) as count 
+            FROM question_challenges 
+            WHERE question_id = ?
+        ");
+        $stmt->execute([$questionId]);
+        $result = $stmt->fetch();
+        return $result['count'] ?? 0;
+    }
+    
+    public function updateQuestionAfterChallenge($questionId, $newCorrectAnswer, $newExplanation) {
+        $stmt = $this->conn->prepare("
+            UPDATE questions 
+            SET correct_answer = ?, 
+                explanation = ?
+            WHERE id = ?
+        ");
+        $stmt->execute([
+            $newCorrectAnswer ? 1 : 0,
+            $newExplanation,
+            $questionId
+        ]);
+    }
+    
+    public function recalculateUserProgress($userId, $sessionId) {
+        // Recalcula estatísticas após mudança de gabarito
+        $stmt = $this->conn->prepare("
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN user_answer = correct_answer THEN 1 ELSE 0 END) as correct
+            FROM questions
+            WHERE user_id = ? AND session_id = ? AND user_answer IS NOT NULL
+        ");
+        $stmt->execute([$userId, $sessionId]);
+        $stats = $stmt->fetch();
+        
+        if ($stats) {
+            $stmt = $this->conn->prepare("
+                UPDATE user_progress 
+                SET correct_answers = ?, total_answers = ?
+                WHERE user_id = ? AND session_id = ?
+            ");
+            $stmt->execute([
+                $stats['correct'],
+                $stats['total'],
+                $userId,
+                $sessionId
+            ]);
+        }
     }
     
     public function __destruct() {
