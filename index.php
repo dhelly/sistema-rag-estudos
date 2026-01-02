@@ -22,6 +22,13 @@ $action = $_GET['action'] ?? '';
 $message = '';
 $error = '';
 
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+
+$user_id = $_SESSION['user_id'];
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         switch ($action) {
@@ -62,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     
                     // Criar sessão
-                    $sessionId = $db->createSession($pdfName, $extractedText, $analysis['coreTopics']);
+                    $sessionId = $db->createSession($user_id, $pdfName, $extractedText, $analysis['coreTopics']);
                     $_SESSION['session_id'] = $sessionId;
                     
                     $message = "PDF processado com sucesso: {$pdfName}";
@@ -86,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     
                     // Criar sessão com o conteúdo resumido
-                    $sessionId = $db->createSession($materialName, $summaryText, $analysis['coreTopics']);
+                    $sessionId = $db->createSession($user_id, $materialName, $summaryText, $analysis['coreTopics']);
                     $_SESSION['session_id'] = $sessionId;
                     
                     $message = "Resumo processado com sucesso: {$materialName}";
@@ -135,8 +142,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new Exception("Erro ao gerar questão. Tente novamente.");
                     }
                     
-                    // Salvar questão
-                    $questionId = $db->saveQuestion($sessionId, $question, $progress['difficulty_level']);
+                    // Salvar questão                    
+                    $questionId = $db->saveQuestion($sessionId, $user_id, $question, $progress['difficulty_level']);
                     $_SESSION['current_question'] = $questionId;
                 }
                 break;

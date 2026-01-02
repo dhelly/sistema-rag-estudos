@@ -1,12 +1,12 @@
 <?php
 /**
- * ARQUIVO 2 de 6: auth.php (CORRIGIDO)
+ * AUTH v2.1 - Sistema Multi-usuário
  * 
  * Salve este arquivo como: auth.php
- * Sistema de autenticação simples
  */
 
 require_once 'config.php';
+require_once 'database.php';
 
 class Auth {
     
@@ -24,6 +24,11 @@ class Auth {
             return false;
         }
         
+        // Verifica se user_id existe
+        if (!isset($_SESSION['user_id'])) {
+            return false;
+        }
+        
         // Verifica timeout da sessão
         if (isset($_SESSION['last_activity'])) {
             $timeout = getConfig('SESSION_TIMEOUT', 3600);
@@ -38,20 +43,61 @@ class Auth {
         return true;
     }
     
-    public static function login($username, $password) {
-        $validUsername = getConfig('LOGIN_USERNAME', 'admin');
-        $validPassword = getConfig('LOGIN_PASSWORD', 'admin');
+    public static function login($email, $password) {
+        $db = new Database();
+        $user = $db->verifyPassword($email, $password);
         
-        if ($username === $validUsername && $password === $validPassword) {
+        if ($user) {
             self::startSession();
             $_SESSION['logged_in'] = true;
-            $_SESSION['username'] = $username;
+            $_SESSION['user_id'] = $user['id'];
+            $_SESSION['user_email'] = $user['email'];
+            $_SESSION['user_name'] = $user['name'];
+            $_SESSION['is_admin'] = $user['is_admin'];
             $_SESSION['last_activity'] = time();
             $_SESSION['login_time'] = time();
+            
+            // Atualiza último login
+            $db->updateLastLogin($user['id']);
+            
             return true;
         }
         
         return false;
+    }
+    
+    public static function register($email, $password, $name) {
+        // Verifica se registro está habilitado
+        if (getConfig('ALLOW_REGISTRATION', 'true') !== 'true') {
+            throw new Exception("Registro de novos usuários está desabilitado.");
+        }
+        
+        // Valida email
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new Exception("Email inválido.");
+        }
+        
+        // Valida senha
+        if (strlen($password) < 6) {
+            throw new Exception("A senha deve ter no mínimo 6 caracteres.");
+        }
+        
+        // Valida nome
+        if (strlen($name) < 3) {
+            throw new Exception("O nome deve ter no mínimo 3 caracteres.");
+        }
+        
+        $db = new Database();
+        
+        // Verifica se email já existe
+        if ($db->getUserByEmail($email)) {
+            throw new Exception("Este email já está cadastrado.");
+        }
+        
+        // Cria usuário
+        $userId = $db->createUser($email, $password, $name);
+        
+        return $userId;
     }
     
     public static function logout() {
@@ -67,9 +113,24 @@ class Auth {
         }
     }
     
-    public static function getUsername() {
+    public static function getUserId() {
         self::startSession();
-        return $_SESSION['username'] ?? 'Usuário';
+        return $_SESSION['user_id'] ?? null;
+    }
+    
+    public static function getUserEmail() {
+        self::startSession();
+        return $_SESSION['user_email'] ?? 'Usuário';
+    }
+    
+    public static function getUserName() {
+        self::startSession();
+        return $_SESSION['user_name'] ?? 'Usuário';
+    }
+    
+    public static function isAdmin() {
+        self::startSession();
+        return isset($_SESSION['is_admin']) && $_SESSION['is_admin'];
     }
     
     public static function getSessionDuration() {

@@ -24,14 +24,14 @@ if (Auth::checkLogin()) {
 
 // Processa login
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
+    $email = $_POST['email'] ?? '';
     $password = $_POST['password'] ?? '';
     
-    if (Auth::login($username, $password)) {
+    if (Auth::login($email, $password)) {
         header('Location: index.php');
         exit;
     } else {
-        $error = 'Usuário ou senha inválidos!';
+        $error = 'Email ou senha inválidos!';
     }
 }
 
@@ -72,15 +72,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <form method="POST" action="">
                 <div class="mb-6">
                     <label class="block text-sm font-semibold text-gray-700 mb-2">
-                        Usuário
+                        Email
                     </label>
                     <input 
-                        type="text" 
-                        name="username" 
+                        type="email" 
+                        name="email" 
                         required
-                        autocomplete="username"
+                        autocomplete="email"
                         class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
-                        placeholder="Digite seu usuário"
+                        placeholder="seu@email.com"
                     >
                 </div>
 
@@ -105,6 +105,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     Entrar →
                 </button>
             </form>
+
+            <?php if (getConfig('ALLOW_REGISTRATION', 'true') === 'true'): ?>
+                <div class="mt-6 text-center">
+                    <p class="text-gray-600">
+                        Não tem uma conta?
+                        <a href="register.php" class="text-indigo-600 hover:text-indigo-700 font-semibold">
+                            Criar conta
+                        </a>
+                    </p>
+                </div>
+            <?php endif; ?>
         </div>
 
         <!-- Informações de Configuração -->
