@@ -1,8 +1,8 @@
 <?php
 /**
- * AUTH v2.1 - Sistema Multi-usuário
+ * AUTH v2.4 - Sistema Multi-usuário COM ATIVAÇÃO
  * 
- * Salve este arquivo como: auth.php
+ * Substitua o conteúdo completo do auth.php por este
  */
 
 require_once 'config.php';
@@ -29,6 +29,13 @@ class Auth {
             return false;
         }
         
+        // Verifica se usuário ainda está ativo
+        $db = new Database();
+        if (!$db->isUserActive($_SESSION['user_id'])) {
+            self::logout();
+            return false;
+        }
+        
         // Verifica timeout da sessão
         if (isset($_SESSION['last_activity'])) {
             $timeout = getConfig('SESSION_TIMEOUT', 3600);
@@ -48,6 +55,11 @@ class Auth {
         $user = $db->verifyPassword($email, $password);
         
         if ($user) {
+            // NOVA VERIFICAÇÃO: Usuário deve estar ativo
+            if (!$user['active']) {
+                throw new Exception("Sua conta ainda não foi ativada pelo administrador. Por favor, aguarde a aprovação.");
+            }
+            
             self::startSession();
             $_SESSION['logged_in'] = true;
             $_SESSION['user_id'] = $user['id'];
@@ -94,7 +106,7 @@ class Auth {
             throw new Exception("Este email já está cadastrado.");
         }
         
-        // Cria usuário
+        // Cria usuário (INATIVO por padrão - aguardando aprovação do admin)
         $userId = $db->createUser($email, $password, $name);
         
         return $userId;
@@ -109,6 +121,14 @@ class Auth {
     public static function requireLogin() {
         if (!self::checkLogin()) {
             header('Location: login.php');
+            exit;
+        }
+    }
+    
+    public static function requireAdmin() {
+        self::requireLogin();
+        if (!self::isAdmin()) {
+            header('Location: index.php');
             exit;
         }
     }

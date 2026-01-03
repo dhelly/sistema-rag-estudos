@@ -1,8 +1,8 @@
 <?php
 /**
- * REGISTER v2.1 - Página de Registro
+ * REGISTER v2.4 - Página de Registro COM AVISO DE ATIVAÇÃO
  * 
- * Salve este arquivo como: register.php
+ * Substitua o register.php existente por este código
  */
 
 require_once 'config.php';
@@ -14,7 +14,7 @@ $success = '';
 // Verifica se registro está habilitado
 $allowRegistration = getConfig('ALLOW_REGISTRATION', 'true') === 'true';
 
-// Inicia sessão se ainda não foi iniciada
+// Inicia sessão
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -38,10 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $allowRegistration) {
         }
         
         Auth::register($email, $password, $name);
-        $success = "Conta criada com sucesso! Você já pode fazer login.";
-        
-        // Redireciona para login após 2 segundos
-        header("refresh:2;url=login.php");
+        $success = "Conta criada com sucesso! Aguarde a ativação pelo administrador para fazer login.";
         
     } catch (Exception $e) {
         $error = $e->getMessage();
@@ -67,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $allowRegistration) {
                 Criar Nova Conta
             </h1>
             <p class="text-indigo-200">
-                Sistema RAG de Estudos v2.1
+                Sistema RAG de Estudos v2.4
             </p>
         </div>
 
@@ -86,12 +83,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $allowRegistration) {
                 <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-6 rounded">
                     <div class="flex items-center">
                         <span class="text-xl mr-2">✓</span>
-                        <span><?= htmlspecialchars($success) ?></span>
+                        <div class="flex-1">
+                            <p class="font-semibold mb-1"><?= htmlspecialchars($success) ?></p>
+                            <p class="text-sm">Você receberá acesso assim que um administrador aprovar sua conta.</p>
+                        </div>
                     </div>
                 </div>
-            <?php endif; ?>
-
-            <?php if (!$allowRegistration): ?>
+                <a href="login.php" class="block text-center text-indigo-600 hover:text-indigo-700 font-semibold">
+                    ← Voltar para o login
+                </a>
+            <?php elseif (!$allowRegistration): ?>
                 <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 rounded">
                     <div class="flex items-center">
                         <span class="text-xl mr-2">⚠️</span>
@@ -102,6 +103,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $allowRegistration) {
                     ← Voltar para o login
                 </a>
             <?php else: ?>
+                <!-- Aviso de Ativação -->
+                <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6 rounded">
+                    <div class="flex items-start gap-2">
+                        <span class="text-xl">ℹ️</span>
+                        <div class="flex-1 text-sm text-blue-800">
+                            <p class="font-semibold mb-1">Ativação Necessária</p>
+                            <p>Após criar sua conta, você precisará aguardar a <strong>aprovação de um administrador</strong> antes de poder fazer login. Isso garante a segurança do sistema.</p>
+                        </div>
+                    </div>
+                </div>
+
                 <form method="POST" action="">
                     <div class="mb-4">
                         <label class="block text-sm font-semibold text-gray-700 mb-2">
@@ -183,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $allowRegistration) {
 
         <!-- Rodapé -->
         <div class="mt-6 text-center text-indigo-200 text-sm">
-            <p>Ao criar uma conta, você concorda com nossos termos de uso</p>
+            <p>🔒 Conta protegida com ativação administrativa</p>
         </div>
     </div>
 

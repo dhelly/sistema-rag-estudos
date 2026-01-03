@@ -1,14 +1,15 @@
 <?php
 /**
- * DATABASE v2.1 - Suporte MySQL Multi-usuário
+ * DATABASE v2.4 - Suporte MySQL Multi-usuário COM ATIVAÇÃO
  * 
- * Salve este arquivo como: database.php
+ * SUBSTITUA COMPLETAMENTE o database.php por este código
+ * As tabelas já são criadas com o sistema de ativação integrado
  */
 
 require_once 'config.php';
 
 class Database {
-    private $conn;
+    public $conn;
     private $dbType;
     
     public function __construct() {
@@ -63,7 +64,7 @@ class Database {
     }
     
     private function createMySQLTables() {
-        // Tabela de usuários
+        // Tabela de usuários COM SISTEMA DE ATIVAÇÃO
         $this->conn->exec("
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,9 +72,14 @@ class Database {
                 password VARCHAR(255) NOT NULL,
                 name VARCHAR(255) NOT NULL,
                 is_admin BOOLEAN DEFAULT FALSE,
+                active BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_login TIMESTAMP NULL,
-                INDEX idx_email (email)
+                activated_at TIMESTAMP NULL,
+                activated_by INT NULL,
+                INDEX idx_email (email),
+                INDEX idx_active (active),
+                FOREIGN KEY (activated_by) REFERENCES users(id) ON DELETE SET NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
         
@@ -175,12 +181,12 @@ class Database {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
         
-        // Criar usuário admin padrão se não existir
+        // Criar usuário admin padrão
         $this->createDefaultAdmin();
     }
     
     private function createSQLiteTables() {
-        // Mantém compatibilidade com SQLite da v2.0
+        // Tabela de usuários COM SISTEMA DE ATIVAÇÃO
         $this->conn->exec("
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,8 +194,12 @@ class Database {
                 password TEXT NOT NULL,
                 name TEXT NOT NULL,
                 is_admin INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_login DATETIME
+                last_login DATETIME,
+                activated_at DATETIME,
+                activated_by INTEGER,
+                FOREIGN KEY(activated_by) REFERENCES users(id)
             )
         ");
         
@@ -241,6 +251,26 @@ class Database {
             )
         ");
         
+        $this->conn->exec("
+            CREATE TABLE IF NOT EXISTS question_challenges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                user_argument TEXT NOT NULL,
+                ai_analysis TEXT NOT NULL,
+                web_sources TEXT,
+                challenge_result TEXT DEFAULT 'pending',
+                original_answer INTEGER NOT NULL,
+                suggested_answer INTEGER,
+                original_explanation TEXT NOT NULL,
+                updated_explanation TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at DATETIME,
+                FOREIGN KEY(question_id) REFERENCES questions(id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        ");
+        
         $this->createDefaultAdmin();
     }
     
@@ -254,12 +284,20 @@ class Database {
             
             if (!$stmt->fetch()) {
                 $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
-                $stmt = $this->conn->prepare("
-                    INSERT INTO users (email, password, name, is_admin) 
-                    VALUES (?, ?, ?, ?)
-                ");
-                $isAdmin = $this->dbType === 'mysql' ? 1 : 1;
-                $stmt->execute([$email, $hashedPassword, 'Administrador', $isAdmin]);
+                
+                if ($this->dbType === 'mysql') {
+                    $stmt = $this->conn->prepare("
+                        INSERT INTO users (email, password, name, is_admin, active, activated_at) 
+                        VALUES (?, ?, ?, 1, 1, NOW())
+                    ");
+                } else {
+                    $stmt = $this->conn->prepare("
+                        INSERT INTO users (email, password, name, is_admin, active, activated_at) 
+                        VALUES (?, ?, ?, 1, 1, CURRENT_TIMESTAMP)
+                    ");
+                }
+                
+                $stmt->execute([$email, $hashedPassword, 'Administrador']);
             }
         } catch (Exception $e) {
             // Ignora se já existir
@@ -273,8 +311,8 @@ class Database {
     public function createUser($email, $password, $name) {
         $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
         $stmt = $this->conn->prepare("
-            INSERT INTO users (email, password, name) 
-            VALUES (?, ?, ?)
+            INSERT INTO users (email, password, name, active) 
+            VALUES (?, ?, ?, 0)
         ");
         $stmt->execute([$email, $hashedPassword, $name]);
         return $this->conn->lastInsertId();
@@ -293,8 +331,9 @@ class Database {
     }
     
     public function updateLastLogin($userId) {
-        $stmt = $this->conn->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
-        if ($this->dbType === 'sqlite') {
+        if ($this->dbType === 'mysql') {
+            $stmt = $this->conn->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
+        } else {
             $stmt = $this->conn->prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?");
         }
         $stmt->execute([$userId]);
@@ -306,6 +345,123 @@ class Database {
             return $user;
         }
         return false;
+    }
+    
+    // ==========================================
+    // MÉTODOS DE ADMINISTRAÇÃO DE USUÁRIOS
+    // ==========================================
+    
+    public function getAllUsers($orderBy = 'created_at', $order = 'DESC') {
+        $allowedColumns = ['id', 'name', 'email', 'created_at', 'last_login', 'active'];
+        $allowedOrder = ['ASC', 'DESC'];
+        
+        if (!in_array($orderBy, $allowedColumns)) {
+            $orderBy = 'created_at';
+        }
+        
+        if (!in_array($order, $allowedOrder)) {
+            $order = 'DESC';
+        }
+        
+        $stmt = $this->conn->prepare("
+            SELECT 
+                u.id,
+                u.email,
+                u.name,
+                u.is_admin,
+                u.active,
+                u.created_at,
+                u.last_login,
+                u.activated_at,
+                u.activated_by,
+                activator.name as activated_by_name
+            FROM users u
+            LEFT JOIN users activator ON u.activated_by = activator.id
+            ORDER BY {$orderBy} {$order}
+        ");
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+    
+    public function getPendingUsers() {
+        $stmt = $this->conn->prepare("
+            SELECT 
+                id,
+                email,
+                name,
+                created_at
+            FROM users
+            WHERE active = 0
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+    
+    public function countPendingUsers() {
+        $stmt = $this->conn->prepare("
+            SELECT COUNT(*) as count 
+            FROM users 
+            WHERE active = 0
+        ");
+        $stmt->execute();
+        $result = $stmt->fetch();
+        return $result['count'] ?? 0;
+    }
+    
+    public function activateUser($userId, $activatedBy) {
+        if ($this->dbType === 'mysql') {
+            $stmt = $this->conn->prepare("
+                UPDATE users 
+                SET active = 1, 
+                    activated_at = NOW(), 
+                    activated_by = ?
+                WHERE id = ?
+            ");
+        } else {
+            $stmt = $this->conn->prepare("
+                UPDATE users 
+                SET active = 1, 
+                    activated_at = CURRENT_TIMESTAMP, 
+                    activated_by = ?
+                WHERE id = ?
+            ");
+        }
+        
+        $stmt->execute([$activatedBy, $userId]);
+        return $stmt->rowCount() > 0;
+    }
+    
+    public function deactivateUser($userId) {
+        $stmt = $this->conn->prepare("
+            UPDATE users 
+            SET active = 0,
+                activated_at = NULL,
+                activated_by = NULL
+            WHERE id = ?
+        ");
+        $stmt->execute([$userId]);
+        return $stmt->rowCount() > 0;
+    }
+    
+    public function isUserActive($userId) {
+        $stmt = $this->conn->prepare("SELECT active FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        $result = $stmt->fetch();
+        return $result ? (bool)$result['active'] : false;
+    }
+    
+    public function toggleAdmin($userId, $isAdmin) {
+        $adminValue = $isAdmin ? 1 : 0;
+        $stmt = $this->conn->prepare("UPDATE users SET is_admin = ? WHERE id = ?");
+        $stmt->execute([$adminValue, $userId]);
+        return $stmt->rowCount() > 0;
+    }
+    
+    public function deleteUser($userId) {
+        $stmt = $this->conn->prepare("DELETE FROM users WHERE id = ?");
+        $stmt->execute([$userId]);
+        return $stmt->rowCount() > 0;
     }
     
     // ==========================================
@@ -357,10 +513,6 @@ class Database {
         return $stmt->fetchAll();
     }
     
-    /**
-     * Busca sessões do usuário com dados de progresso
-     * Ordenadas por dificuldade (menor para maior) para priorizar onde usuário está pior
-     */
     public function getUserSessionsWithProgress($userId, $limit = 20) {
         if ($this->dbType === 'mysql') {
             $stmt = $this->conn->prepare("
@@ -381,7 +533,6 @@ class Database {
             ");
             $stmt->execute([$userId, $userId, $limit]);
         } else {
-            // SQLite
             $stmt = $this->conn->prepare("
                 SELECT 
                     s.id,
@@ -403,25 +554,13 @@ class Database {
         
         return $stmt->fetchAll();
     }
-
-    /**
-     * ADICIONE ESTE MÉTODO à classe Database no arquivo database.php
-     * (Cole junto com os outros métodos de sessão)
-     */
-
-    /**
-     * Exclui uma sessão e todos os dados relacionados
-     * O CASCADE do banco de dados já remove automaticamente:
-     * - user_progress
-     * - questions
-     * - question_challenges
-     */
+    
     public function deleteSession($sessionId) {
         $stmt = $this->conn->prepare("DELETE FROM study_sessions WHERE id = ?");
         $stmt->execute([$sessionId]);
-        
         return $stmt->rowCount() > 0;
     }
+    
     // ==========================================
     // MÉTODOS DE PROGRESSO
     // ==========================================
@@ -584,7 +723,7 @@ class Database {
     // ==========================================
     // MÉTODOS DE QUESTIONAMENTO
     // ==========================================
-
+    
     public function getUsersAffectedByQuestion($questionId) {
         $stmt = $this->conn->prepare("
             SELECT DISTINCT user_id, session_id 
@@ -594,7 +733,7 @@ class Database {
         $stmt->execute([$questionId]);
         return $stmt->fetchAll();
     }
-
+    
     public function getQuestionChallengesFull($questionId) {
         $stmt = $this->conn->prepare("
             SELECT c.*, u.name as user_name, u.email as user_email 
@@ -711,7 +850,6 @@ class Database {
     }
     
     public function recalculateUserProgress($userId, $sessionId) {
-        // Recalcula estatísticas após mudança de gabarito
         $stmt = $this->conn->prepare("
             SELECT 
                 COUNT(*) as total,

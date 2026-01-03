@@ -1,9 +1,8 @@
 <?php
 /**
- * ARQUIVO 3 de 6: login.php (CORRIGIDO)
+ * LOGIN.PHP v2.4 - Com tratamento de exceções de ativação
  * 
- * Salve este arquivo como: login.php
- * Página de login do sistema
+ * Substitua o login.php por este código
  */
 
 require_once 'config.php';
@@ -27,11 +26,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = $_POST['email'] ?? '';
     $password = $_POST['password'] ?? '';
     
-    if (Auth::login($email, $password)) {
-        header('Location: index.php');
-        exit;
-    } else {
-        $error = 'Email ou senha inválidos!';
+    try {
+        if (Auth::login($email, $password)) {
+            header('Location: index.php');
+            exit;
+        } else {
+            $error = 'Email ou senha inválidos!';
+        }
+    } catch (Exception $e) {
+        // Captura exceção de conta não ativada
+        $error = $e->getMessage();
     }
 }
 
@@ -62,9 +66,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="bg-white rounded-2xl shadow-2xl p-8">
             <?php if ($error): ?>
                 <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded">
-                    <div class="flex items-center">
+                    <div class="flex items-start">
                         <span class="text-xl mr-2">⚠️</span>
-                        <span><?= htmlspecialchars($error) ?></span>
+                        <div class="flex-1">
+                            <p class="font-semibold"><?= htmlspecialchars($error) ?></p>
+                            
+                            <?php if (strpos($error, 'não foi ativada') !== false): ?>
+                                <p class="text-sm mt-2">
+                                    Entre em contato com um administrador ou aguarde a aprovação da sua conta.
+                                </p>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
             <?php endif; ?>
@@ -79,6 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         name="email" 
                         required
                         autocomplete="email"
+                        value="<?= htmlspecialchars($_POST['email'] ?? '') ?>"
                         class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
                         placeholder="seu@email.com"
                     >
@@ -118,9 +131,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php endif; ?>
         </div>
 
-        <!-- Informações de Configuração -->
-        <div class="mt-6 text-center text-indigo-200 text-sm">
-            <p>Configure usuário e senha no arquivo <code class="bg-indigo-800 px-2 py-1 rounded">.env</code></p>
+        <!-- Informações de Login Admin -->
+        <div class="mt-6 p-4 bg-white/10 backdrop-blur-sm rounded-xl text-center text-indigo-200 text-sm">
+            <p class="font-semibold mb-2">🔐 Login de Administrador:</p>
+            <p class="text-xs">
+                Use as credenciais configuradas no arquivo <code class="bg-indigo-800 px-2 py-1 rounded">.env</code>
+            </p>
+            <p class="text-xs mt-1 opacity-75">
+                (ADMIN_EMAIL e ADMIN_PASSWORD)
+            </p>
         </div>
     </div>
 
