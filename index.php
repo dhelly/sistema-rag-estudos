@@ -1,13 +1,9 @@
 <?php
 /**
- * ARQUIVO 5 de 6: index.php (v2.3 - COM GERENCIAMENTO DE SESSÕES)
+ * INDEX.PHP v2.3.1 - Versão Simplificada
  * 
- * Salve este arquivo como: index.php
- * Melhorias v2.3:
- * - Seleção de sessões existentes
- * - Economia de tokens (sem reprocessar PDFs)
- * - Ordenação por nível de dificuldade
- * - Continuar de onde parou
+ * Listagem de sessões movida para sessions.php
+ * Mantém apenas upload e área de estudo
  */
 
 require_once 'config.php';
@@ -16,7 +12,6 @@ require_once 'database.php';
 require_once 'api.php';
 require_once 'challenge_agent.php';
 
-// Requer login
 Auth::requireLogin();
 
 $db = new Database();
@@ -36,27 +31,6 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         switch ($action) {
-            case 'select_session':
-                if (isset($_POST['session_id'])) {
-                    $sessionId = (int)$_POST['session_id'];
-                    
-                    // Verificar se sessão pertence ao usuário
-                    $session = $db->getSession($sessionId);
-                    if ($session && $session['user_id'] == $userId) {
-                        $_SESSION['session_id'] = $sessionId;
-                        
-                        // Limpar questão atual e feedbacks ao trocar de sessão
-                        unset($_SESSION['current_question']);
-                        unset($_SESSION['last_answer']);
-                        unset($_SESSION['challenge_result']);
-                        
-                        $message = "Sessão retomada: " . htmlspecialchars($session['pdf_name']);
-                    } else {
-                        throw new Exception("Sessão não encontrada ou sem permissão.");
-                    }
-                }
-                break;
-                
             case 'change_provider':
                 if (isset($_POST['provider'])) {
                     $provider = $_POST['provider'];
@@ -66,8 +40,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         setCurrentProvider($provider);
                         $api = new UnifiedAI($provider);
                         $message = "Provedor alterado para: " . getProviderConfig($provider)['name'];
-                    } else {
-                        throw new Exception("Provedor inválido ou não configurado!");
                     }
                 }
                 break;
@@ -108,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $analysis = json_decode(trim($cleanJson), true);
                     
                     if (!isset($analysis['coreTopics'])) {
-                        throw new Exception("Erro ao processar o resumo. Verifique o formato do texto.");
+                        throw new Exception("Erro ao processar o resumo.");
                     }
                     
                     $sessionId = $db->createSession($userId, $materialName, $summaryText, $analysis['coreTopics']);
@@ -155,7 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $question = json_decode(trim($cleanJson), true);
                     
                     if (!isset($question['statement'])) {
-                        throw new Exception("Erro ao gerar questão. Tente novamente.");
+                        throw new Exception("Erro ao gerar questão.");
                     }
                     
                     $questionId = $db->saveQuestion($sessionId, $userId, $question, $progress['difficulty_level']);
@@ -215,31 +187,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
             case 'challenge':
                 if (isset($_POST['question_id']) && isset($_POST['argument'])) {
-                    try {
-                        $questionId = $_POST['question_id'];
-                        $argument = trim($_POST['argument']);
-                        
-                        if (empty($argument)) {
-                            throw new Exception("Por favor, forneça sua argumentação.");
-                        }
-                        
-                        if (strlen($argument) < 20) {
-                            throw new Exception("Sua argumentação deve ter pelo menos 20 caracteres.");
-                        }
-                        
-                        $challengeAgent = new ChallengeAgent();
-                        $result = $challengeAgent->processChallenge($questionId, $userId, $argument);
-                        
-                        $_SESSION['challenge_result'] = $result;
-                        
-                        if ($result['decision'] === 'accepted') {
-                            $message = "✅ Questionamento ACEITO! O gabarito foi corrigido.";
-                        } else {
-                            $message = "📋 Questionamento analisado. Veja os detalhes abaixo.";
-                        }
-                        
-                    } catch (Exception $e) {
-                        $error = $e->getMessage();
+                    $questionId = $_POST['question_id'];
+                    $argument = trim($_POST['argument']);
+                    
+                    if (empty($argument) || strlen($argument) < 20) {
+                        throw new Exception("Argumentação deve ter pelo menos 20 caracteres.");
+                    }
+                    
+                    $challengeAgent = new ChallengeAgent();
+                    $result = $challengeAgent->processChallenge($questionId, $userId, $argument);
+                    
+                    $_SESSION['challenge_result'] = $result;
+                    
+                    if ($result['decision'] === 'accepted') {
+                        $message = "✅ Questionamento ACEITO!";
+                    } else {
+                        $message = "📋 Questionamento analisado.";
                     }
                 }
                 break;
@@ -274,8 +237,8 @@ if (isset($_SESSION['session_id'])) {
     }
 }
 
-// Buscar sessões do usuário para seleção (ordenadas por dificuldade)
-$userSessions = $db->getUserSessionsWithProgress($userId, 20);
+// Contar sessões do usuário
+$userSessionsCount = count($db->getUserSessions($userId, 100));
 
 ?>
 <!DOCTYPE html>
@@ -286,7 +249,6 @@ $userSessions = $db->getUserSessionsWithProgress($userId, 20);
     <title>Sistema RAG de Estudos Inteligente</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Loading Overlay */
         #loadingOverlay {
             display: none;
             position: fixed;
@@ -352,14 +314,13 @@ $userSessions = $db->getUserSessionsWithProgress($userId, 20);
         </div>
     </div>
     
-    <!-- Header com Info do Usuário -->
+    <!-- Header -->
     <div class="max-w-4xl mx-auto mb-4">
         <div class="bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 flex justify-between items-center text-white text-sm">
             <div class="flex items-center gap-4">
                 <span>👤 <?= htmlspecialchars(Auth::getUserName()) ?></span>
                 <span>⏱️ <?= Auth::getSessionDuration() ?></span>
                 
-                <!-- Seletor de Provedor -->
                 <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2" onsubmit="showLoading('Alterando provedor...')">
                     <span>🤖</span>
                     <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 [&_option]:text-black [&_option]:bg-white">
@@ -373,6 +334,11 @@ $userSessions = $db->getUserSessionsWithProgress($userId, 20);
             </div>
             
             <div class="flex items-center gap-2">
+                <?php if ($userSessionsCount > 0): ?>
+                    <a href="sessions.php" class="px-3 py-1 bg-purple-500/80 hover:bg-purple-600 rounded transition-colors flex items-center gap-1">
+                        📚 Sessões (<?= $userSessionsCount ?>)
+                    </a>
+                <?php endif; ?>
                 <a href="reports.php" class="px-3 py-1 bg-blue-500/80 hover:bg-blue-600 rounded transition-colors">
                     📊 Relatórios
                 </a>
@@ -399,8 +365,8 @@ $userSessions = $db->getUserSessionsWithProgress($userId, 20);
         <?php endif; ?>
         
         <?php if (!$session): ?>
-            <!-- Tela de Seleção/Upload -->
-            <div class="bg-white rounded-2xl shadow-2xl p-8 mb-6">
+            <!-- Tela de Upload Simplificada -->
+            <div class="bg-white rounded-2xl shadow-2xl p-8">
                 <div class="text-center mb-8">
                     <div class="text-6xl mb-4">🧠</div>
                     <h1 class="text-3xl font-bold text-gray-800 mb-2">
@@ -411,79 +377,47 @@ $userSessions = $db->getUserSessionsWithProgress($userId, 20);
                     </p>
                 </div>
 
-                <!-- Sessões Existentes -->
-                <?php if (!empty($userSessions)): ?>
-                    <div class="mb-8">
-                        <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-                            📚 Suas Sessões de Estudo
-                            <span class="text-sm font-normal text-gray-500">(ordenadas por nível - comece pelas mais difíceis)</span>
-                        </h2>
-                        
-                        <div class="space-y-3">
-                            <?php foreach ($userSessions as $sess): 
-                                $percentage = $sess['total_answers'] > 0 
-                                    ? round(($sess['correct_answers'] / $sess['total_answers']) * 100) 
-                                    : 0;
-                                
-                                // Definir cor baseada no nível
-                                $levelColor = 'bg-green-100 border-green-300 text-green-800';
-                                if ($sess['difficulty_level'] <= 2) {
-                                    $levelColor = 'bg-red-100 border-red-300 text-red-800';
-                                } elseif ($sess['difficulty_level'] <= 3) {
-                                    $levelColor = 'bg-yellow-100 border-yellow-300 text-yellow-800';
-                                }
-                            ?>
-                                <form method="POST" action="?action=select_session" class="block">
-                                    <input type="hidden" name="session_id" value="<?= $sess['id'] ?>">
-                                    <button type="submit" class="w-full text-left p-4 rounded-lg border-2 hover:border-indigo-400 hover:shadow-lg transition-all <?= $levelColor ?> hover:scale-[1.02]">
-                                        <div class="flex items-center justify-between">
-                                            <div class="flex-1">
-                                                <div class="font-bold text-lg mb-1">
-                                                    <?= htmlspecialchars($sess['pdf_name']) ?>
-                                                </div>
-                                                <div class="text-sm opacity-90 flex items-center gap-4">
-                                                    <span>⚡ Nível: <?= $sess['difficulty_level'] ?>/5</span>
-                                                    <span>✓ <?= $sess['correct_answers'] ?>/<?= $sess['total_answers'] ?> (<?= $percentage ?>%)</span>
-                                                    <span>📅 <?= date('d/m/Y', strtotime($sess['created_at'])) ?></span>
-                                                </div>
-                                            </div>
-                                            <div class="ml-4">
-                                                <span class="inline-block px-4 py-2 bg-white/50 rounded-lg font-bold">
-                                                    Continuar →
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </button>
-                                </form>
-                            <?php endforeach; ?>
-                        </div>
-                        
-                        <div class="mt-4 p-3 bg-blue-50 border-l-4 border-blue-400 rounded">
-                            <p class="text-sm text-blue-800">
-                                💡 <strong>Dica:</strong> As sessões estão ordenadas por nível de dificuldade alcançado. 
-                                Comece pelas que estão em vermelho/amarelo para melhorar seu desempenho!
-                            </p>
+                <?php if ($userSessionsCount > 0): ?>
+                    <!-- Link para Sessões Existentes -->
+                    <div class="mb-8 p-6 bg-gradient-to-r from-purple-50 to-indigo-50 border-2 border-purple-200 rounded-xl">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-4">
+                                <div class="text-4xl">📚</div>
+                                <div>
+                                    <h3 class="text-lg font-bold text-gray-800">
+                                        Você tem <?= $userSessionsCount ?> <?= $userSessionsCount === 1 ? 'sessão' : 'sessões' ?> de estudo
+                                    </h3>
+                                    <p class="text-sm text-gray-600">
+                                        Continue de onde parou e economize tokens!
+                                    </p>
+                                </div>
+                            </div>
+                            <a href="sessions.php" class="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl font-bold hover:shadow-lg transition-all">
+                                Ver Sessões →
+                            </a>
                         </div>
                     </div>
                     
-                    <div class="border-t-2 border-gray-200 pt-8">
-                        <h2 class="text-xl font-bold text-gray-800 mb-4 text-center">
-                            Ou crie uma nova sessão
-                        </h2>
+                    <div class="text-center mb-6">
+                        <div class="inline-flex items-center gap-3">
+                            <div class="h-px flex-1 bg-gray-300 w-20"></div>
+                            <span class="text-gray-500 font-semibold">ou crie uma nova</span>
+                            <div class="h-px flex-1 bg-gray-300 w-20"></div>
+                        </div>
                     </div>
                 <?php endif; ?>
 
-                <!-- Tabs de Seleção -->
+                <!-- Tabs -->
                 <div class="flex border-b border-gray-200 mb-6">
-                    <button onclick="showTab('pdf')" id="tab-pdf" class="flex-1 py-3 px-4 text-center font-semibold text-indigo-600 border-b-2 border-indigo-600 transition-colors">
+                    <button onclick="showTab('pdf')" id="tab-pdf" class="flex-1 py-3 px-4 text-center font-semibold text-indigo-600 border-b-2 border-indigo-600">
                         📄 Upload de PDF
                     </button>
-                    <button onclick="showTab('text')" id="tab-text" class="flex-1 py-3 px-4 text-center font-semibold text-gray-500 border-b-2 border-transparent hover:text-indigo-600 transition-colors">
+                    <button onclick="showTab('text')" id="tab-text" class="flex-1 py-3 px-4 text-center font-semibold text-gray-500 border-b-2 border-transparent hover:text-indigo-600">
                         📝 Resumo Pronto (80/20)
                     </button>
                 </div>
 
-                <!-- Tab 1: Upload de PDF -->
+                <!-- PDF Upload -->
                 <div id="content-pdf">
                     <form method="POST" action="?action=upload" enctype="multipart/form-data" id="pdfUploadForm" class="border-4 border-dashed border-indigo-300 rounded-xl p-12 text-center hover:border-indigo-500 transition-colors">
                         <div class="text-5xl mb-4">📄</div>
@@ -502,41 +436,23 @@ $userSessions = $db->getUserSessionsWithProgress($userId, 20);
                     </form>
                 </div>
 
-                <!-- Tab 2: Texto Resumido -->
+                <!-- Text Upload -->
                 <div id="content-text" class="hidden">
                     <form method="POST" action="?action=upload_text" onsubmit="showLoading('Processando resumo...')">
-                        <div class="mb-4">
-                            <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                Cole aqui o resumo 80/20 gerado por outra LLM:
-                            </label>
-                            <textarea 
-                                name="summary_text" 
-                                rows="12" 
-                                required
-                                placeholder="Exemplo:
-
-Tópico 1: Conceitos Fundamentais
-- Ponto-chave 1: ...
-- Ponto-chave 2: ...
-
-Tópico 2: Direitos Fundamentais
-- Ponto-chave 1: ...
-..."
-                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors font-mono text-sm"
-                            ></textarea>
-                        </div>
+                        <textarea 
+                            name="summary_text" 
+                            rows="12" 
+                            required
+                            placeholder="Cole aqui o resumo 80/20..."
+                            class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 font-mono text-sm mb-4"
+                        ></textarea>
                         
-                        <div class="mb-6">
-                            <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                Nome do material (opcional):
-                            </label>
-                            <input 
-                                type="text" 
-                                name="material_name" 
-                                placeholder="Ex: Direito Constitucional - Resumo 80/20"
-                                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
-                            >
-                        </div>
+                        <input 
+                            type="text" 
+                            name="material_name" 
+                            placeholder="Nome do material (opcional)"
+                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 mb-6"
+                        >
 
                         <button 
                             type="submit" 
@@ -550,30 +466,31 @@ Tópico 2: Direitos Fundamentais
 
             <script>
                 function showTab(tab) {
-                    document.getElementById('content-pdf').classList.add('hidden');
-                    document.getElementById('content-text').classList.add('hidden');
+                    document.getElementById('content-pdf').classList.toggle('hidden', tab !== 'pdf');
+                    document.getElementById('content-text').classList.toggle('hidden', tab !== 'text');
                     
-                    document.getElementById('tab-pdf').classList.remove('text-indigo-600', 'border-indigo-600');
-                    document.getElementById('tab-pdf').classList.add('text-gray-500', 'border-transparent');
-                    document.getElementById('tab-text').classList.remove('text-indigo-600', 'border-indigo-600');
-                    document.getElementById('tab-text').classList.add('text-gray-500', 'border-transparent');
-                    
-                    document.getElementById('content-' + tab).classList.remove('hidden');
-                    
-                    document.getElementById('tab-' + tab).classList.remove('text-gray-500', 'border-transparent');
-                    document.getElementById('tab-' + tab).classList.add('text-indigo-600', 'border-indigo-600');
+                    ['pdf', 'text'].forEach(t => {
+                        const tabEl = document.getElementById('tab-' + t);
+                        if (t === tab) {
+                            tabEl.classList.add('text-indigo-600', 'border-indigo-600');
+                            tabEl.classList.remove('text-gray-500', 'border-transparent');
+                        } else {
+                            tabEl.classList.remove('text-indigo-600', 'border-indigo-600');
+                            tabEl.classList.add('text-gray-500', 'border-transparent');
+                        }
+                    });
                 }
                 
                 function handlePdfUpload(input) {
                     if (input.files && input.files[0]) {
                         showLoading('Extraindo texto do PDF...');
-                        setTimeout(() => {
-                            document.getElementById('pdfUploadForm').submit();
-                        }, 100);
+                        setTimeout(() => document.getElementById('pdfUploadForm').submit(), 100);
                     }
                 }
             </script>
         <?php else: ?>
+            <!-- A PARTIR DAQUI É A MESMA TELA DE ESTUDOS DO CÓDIGO ANTERIOR -->
+            <!-- Cole aqui toda a parte de "Tela de Estudos" do código anterior -->
         <!-- Tela de Estudos -->
             <div class="bg-white rounded-2xl shadow-2xl p-6 mb-6">
                 <div class="flex justify-between items-start mb-4">

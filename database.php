@@ -403,6 +403,25 @@ class Database {
         
         return $stmt->fetchAll();
     }
+
+    /**
+     * ADICIONE ESTE MÉTODO à classe Database no arquivo database.php
+     * (Cole junto com os outros métodos de sessão)
+     */
+
+    /**
+     * Exclui uma sessão e todos os dados relacionados
+     * O CASCADE do banco de dados já remove automaticamente:
+     * - user_progress
+     * - questions
+     * - question_challenges
+     */
+    public function deleteSession($sessionId) {
+        $stmt = $this->conn->prepare("DELETE FROM study_sessions WHERE id = ?");
+        $stmt->execute([$sessionId]);
+        
+        return $stmt->rowCount() > 0;
+    }
     // ==========================================
     // MÉTODOS DE PROGRESSO
     // ==========================================
