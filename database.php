@@ -357,6 +357,71 @@ class Database {
         return $stmt->fetchAll();
     }
     
+    /**
+     * Busca sessões do usuário com dados de progresso
+     * Ordenadas por dificuldade (menor para maior) para priorizar onde usuário está pior
+     */
+    public function getUserSessionsWithProgress($userId, $limit = 20) {
+        if ($this->dbType === 'mysql') {
+            $stmt = $this->conn->prepare("
+                SELECT 
+                    s.id,
+                    s.pdf_name,
+                    s.created_at,
+                    s.updated_at,
+                    COALESCE(up.difficulty_level, 1) as difficulty_level,
+                    COALESCE(up.correct_answers, 0) as correct_answers,
+                    COALESCE(up.total_answers, 0) as total_answers,
+                    COALESCE(up.study_time_seconds, 0) as study_time_seconds
+                FROM study_sessions s
+                LEFT JOIN user_progress up ON s.id = up.session_id AND up.user_id = ?
+                WHERE s.user_id = ?
+                ORDER BY difficulty_level ASC, total_answers DESC, s.updated_at DESC
+                LIMIT ?
+            ");
+            $stmt->execute([$userId, $userId, $limit]);
+        } else {
+            // SQLite
+            $stmt = $this->conn->prepare("
+                SELECT 
+                    s.id,
+                    s.pdf_name,
+                    s.created_at,
+                    s.updated_at,
+                    COALESCE(up.difficulty_level, 1) as difficulty_level,
+                    COALESCE(up.correct_answers, 0) as correct_answers,
+                    COALESCE(up.total_answers, 0) as total_answers,
+                    COALESCE(up.study_time_seconds, 0) as study_time_seconds
+                FROM study_sessions s
+                LEFT JOIN user_progress up ON s.id = up.session_id AND up.user_id = ?
+                WHERE s.user_id = ?
+                ORDER BY difficulty_level ASC, total_answers DESC, s.updated_at DESC
+                LIMIT ?
+            ");
+            $stmt->execute([$userId, $userId, $limit]);
+        }
+        
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * ADICIONE ESTE MÉTODO à classe Database no arquivo database.php
+     * (Cole junto com os outros métodos de sessão)
+     */
+
+    /**
+     * Exclui uma sessão e todos os dados relacionados
+     * O CASCADE do banco de dados já remove automaticamente:
+     * - user_progress
+     * - questions
+     * - question_challenges
+     */
+    public function deleteSession($sessionId) {
+        $stmt = $this->conn->prepare("DELETE FROM study_sessions WHERE id = ?");
+        $stmt->execute([$sessionId]);
+        
+        return $stmt->rowCount() > 0;
+    }
     // ==========================================
     // MÉTODOS DE PROGRESSO
     // ==========================================
