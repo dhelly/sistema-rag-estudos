@@ -1,12 +1,13 @@
 <?php
 /**
- * ARQUIVO 5 de 6: index.php (v2.1.2 - COM LOADING)
+ * ARQUIVO 5 de 6: index.php (v2.3 - COM GERENCIAMENTO DE SESSÕES)
  * 
  * Salve este arquivo como: index.php
- * Melhorias v2.1.2:
- * - Sistema de loading com bloqueio de interface
- * - Prevenção de múltiplos cliques
- * - Feedback visual durante processamento
+ * Melhorias v2.3:
+ * - Seleção de sessões existentes
+ * - Economia de tokens (sem reprocessar PDFs)
+ * - Ordenação por nível de dificuldade
+ * - Continuar de onde parou
  */
 
 require_once 'config.php';
@@ -35,6 +36,27 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         switch ($action) {
+            case 'select_session':
+                if (isset($_POST['session_id'])) {
+                    $sessionId = (int)$_POST['session_id'];
+                    
+                    // Verificar se sessão pertence ao usuário
+                    $session = $db->getSession($sessionId);
+                    if ($session && $session['user_id'] == $userId) {
+                        $_SESSION['session_id'] = $sessionId;
+                        
+                        // Limpar questão atual e feedbacks ao trocar de sessão
+                        unset($_SESSION['current_question']);
+                        unset($_SESSION['last_answer']);
+                        unset($_SESSION['challenge_result']);
+                        
+                        $message = "Sessão retomada: " . htmlspecialchars($session['pdf_name']);
+                    } else {
+                        throw new Exception("Sessão não encontrada ou sem permissão.");
+                    }
+                }
+                break;
+                
             case 'change_provider':
                 if (isset($_POST['provider'])) {
                     $provider = $_POST['provider'];
@@ -252,6 +274,9 @@ if (isset($_SESSION['session_id'])) {
     }
 }
 
+// Buscar sessões do usuário para seleção (ordenadas por dificuldade)
+$userSessions = $db->getUserSessionsWithProgress($userId, 20);
+
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -261,7 +286,7 @@ if (isset($_SESSION['session_id'])) {
     <title>Sistema RAG de Estudos Inteligente</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Overlay de Loading */
+        /* Loading Overlay */
         #loadingOverlay {
             display: none;
             position: fixed;
@@ -303,7 +328,6 @@ if (isset($_SESSION['session_id'])) {
             50% { opacity: 0.5; }
         }
         
-        /* Desabilitar interações durante loading */
         body.loading {
             pointer-events: none;
         }
@@ -375,8 +399,8 @@ if (isset($_SESSION['session_id'])) {
         <?php endif; ?>
         
         <?php if (!$session): ?>
-            <!-- Tela de Upload -->
-            <div class="bg-white rounded-2xl shadow-2xl p-8">
+            <!-- Tela de Seleção/Upload -->
+            <div class="bg-white rounded-2xl shadow-2xl p-8 mb-6">
                 <div class="text-center mb-8">
                     <div class="text-6xl mb-4">🧠</div>
                     <h1 class="text-3xl font-bold text-gray-800 mb-2">
@@ -386,6 +410,68 @@ if (isset($_SESSION['session_id'])) {
                         Baseado no Princípio de Pareto (80/20) com questões adaptativas estilo CESPE
                     </p>
                 </div>
+
+                <!-- Sessões Existentes -->
+                <?php if (!empty($userSessions)): ?>
+                    <div class="mb-8">
+                        <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                            📚 Suas Sessões de Estudo
+                            <span class="text-sm font-normal text-gray-500">(ordenadas por nível - comece pelas mais difíceis)</span>
+                        </h2>
+                        
+                        <div class="space-y-3">
+                            <?php foreach ($userSessions as $sess): 
+                                $percentage = $sess['total_answers'] > 0 
+                                    ? round(($sess['correct_answers'] / $sess['total_answers']) * 100) 
+                                    : 0;
+                                
+                                // Definir cor baseada no nível
+                                $levelColor = 'bg-green-100 border-green-300 text-green-800';
+                                if ($sess['difficulty_level'] <= 2) {
+                                    $levelColor = 'bg-red-100 border-red-300 text-red-800';
+                                } elseif ($sess['difficulty_level'] <= 3) {
+                                    $levelColor = 'bg-yellow-100 border-yellow-300 text-yellow-800';
+                                }
+                            ?>
+                                <form method="POST" action="?action=select_session" class="block">
+                                    <input type="hidden" name="session_id" value="<?= $sess['id'] ?>">
+                                    <button type="submit" class="w-full text-left p-4 rounded-lg border-2 hover:border-indigo-400 hover:shadow-lg transition-all <?= $levelColor ?> hover:scale-[1.02]">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex-1">
+                                                <div class="font-bold text-lg mb-1">
+                                                    <?= htmlspecialchars($sess['pdf_name']) ?>
+                                                </div>
+                                                <div class="text-sm opacity-90 flex items-center gap-4">
+                                                    <span>⚡ Nível: <?= $sess['difficulty_level'] ?>/5</span>
+                                                    <span>✓ <?= $sess['correct_answers'] ?>/<?= $sess['total_answers'] ?> (<?= $percentage ?>%)</span>
+                                                    <span>📅 <?= date('d/m/Y', strtotime($sess['created_at'])) ?></span>
+                                                </div>
+                                            </div>
+                                            <div class="ml-4">
+                                                <span class="inline-block px-4 py-2 bg-white/50 rounded-lg font-bold">
+                                                    Continuar →
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </button>
+                                </form>
+                            <?php endforeach; ?>
+                        </div>
+                        
+                        <div class="mt-4 p-3 bg-blue-50 border-l-4 border-blue-400 rounded">
+                            <p class="text-sm text-blue-800">
+                                💡 <strong>Dica:</strong> As sessões estão ordenadas por nível de dificuldade alcançado. 
+                                Comece pelas que estão em vermelho/amarelo para melhorar seu desempenho!
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="border-t-2 border-gray-200 pt-8">
+                        <h2 class="text-xl font-bold text-gray-800 mb-4 text-center">
+                            Ou crie uma nova sessão
+                        </h2>
+                    </div>
+                <?php endif; ?>
 
                 <!-- Tabs de Seleção -->
                 <div class="flex border-b border-gray-200 mb-6">
@@ -488,7 +574,7 @@ Tópico 2: Direitos Fundamentais
                 }
             </script>
         <?php else: ?>
-            <!-- Tela de Estudos -->
+        <!-- Tela de Estudos -->
             <div class="bg-white rounded-2xl shadow-2xl p-6 mb-6">
                 <div class="flex justify-between items-start mb-4">
                     <div>
@@ -501,7 +587,7 @@ Tópico 2: Direitos Fundamentais
                     </div>
                     <form method="POST" action="?action=reset">
                         <button type="submit" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm">
-                            Nova Sessão
+                            Trocar Sessão
                         </button>
                     </form>
                 </div>
@@ -772,7 +858,7 @@ Tópico 2: Direitos Fundamentais
                 Sistema RAG com IA • Princípio de Pareto (80/20) • Questões Adaptativas CESPE
             </p>
             <p class="text-xs opacity-60 mt-1">
-                v2.1.2 - Com Sistema de Loading Inteligente
+                v2.3 - Com Gerenciamento Inteligente de Sessões
             </p>
         </div>
     </div>
@@ -807,16 +893,13 @@ Tópico 2: Direitos Fundamentais
             const form = document.getElementById('challengeSubmitForm');
             const textarea = form.querySelector('textarea[name="argument"]');
             
-            // Validação
             if (!textarea.value || textarea.value.trim().length < 20) {
                 alert('Sua argumentação deve ter pelo menos 20 caracteres.');
                 return;
             }
             
-            // Mostrar loading com mensagem específica
             showLoading('🔍 Buscando informações na web...');
             
-            // Simular etapas do processo
             setTimeout(() => {
                 loadingText.textContent = '🤖 Analisando com IA...';
             }, 2000);
@@ -825,16 +908,13 @@ Tópico 2: Direitos Fundamentais
                 loadingText.textContent = '⚖️ Verificando gabarito...';
             }, 4000);
             
-            // Submeter formulário
             form.submit();
         }
         
-        // Auto-hide loading após carregamento da página
         window.addEventListener('load', function() {
             setTimeout(hideLoading, 500);
         });
         
-        // Prevenir múltiplos cliques em todos os formulários
         const forms = document.querySelectorAll('form');
         forms.forEach(form => {
             let submitted = false;
@@ -845,14 +925,12 @@ Tópico 2: Direitos Fundamentais
                 }
                 submitted = true;
                 
-                // Reset após 5 segundos (caso algo dê errado)
                 setTimeout(() => {
                     submitted = false;
                 }, 5000);
             });
         });
         
-        // Mostrar loading ao voltar com histórico do navegador
         window.addEventListener('pageshow', function(event) {
             if (event.persisted) {
                 hideLoading();
