@@ -1,21 +1,31 @@
 <?php
 /**
- * ARQUIVO 5 de 6: index.php (CORRIGIDO)
+ * ARQUIVO 5 de 6: index.php (v2.1.2 - COM LOADING)
  * 
  * Salve este arquivo como: index.php
- * Este é o arquivo principal da aplicação
+ * Melhorias v2.1.2:
+ * - Sistema de loading com bloqueio de interface
+ * - Prevenção de múltiplos cliques
+ * - Feedback visual durante processamento
  */
 
 require_once 'config.php';
 require_once 'auth.php';
 require_once 'database.php';
 require_once 'api.php';
+require_once 'challenge_agent.php';
 
 // Requer login
 Auth::requireLogin();
 
 $db = new Database();
 $api = new UnifiedAI();
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit();
+}
+$userId = $_SESSION['user_id'];
 
 // Processar ações
 $action = $_GET['action'] ?? '';
@@ -45,14 +55,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pdfName = basename($_FILES['pdf']['name']);
                     $tmpPath = $_FILES['pdf']['tmp_name'];
                     
-                    // Ler e converter PDF para base64
                     $pdfData = file_get_contents($tmpPath);
                     $base64Data = base64_encode($pdfData);
                     
-                    // Extrair texto do PDF
                     $extractedText = $api->extractPDFText($base64Data);
-                    
-                    // Analisar conteúdo
                     $analysisText = $api->analyzeContent($extractedText);
                     $cleanJson = preg_replace('/```json|```/', '', $analysisText);
                     $analysis = json_decode(trim($cleanJson), true);
@@ -61,8 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new Exception("Erro ao analisar o PDF. Tente novamente.");
                     }
                     
-                    // Criar sessão
-                    $sessionId = $db->createSession($pdfName, $extractedText, $analysis['coreTopics']);
+                    $sessionId = $db->createSession($userId, $pdfName, $extractedText, $analysis['coreTopics']);
                     $_SESSION['session_id'] = $sessionId;
                     
                     $message = "PDF processado com sucesso: {$pdfName}";
@@ -76,7 +81,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ? trim($_POST['material_name']) 
                         : 'Resumo 80/20 - ' . date('d/m/Y H:i');
                     
-                    // Processar o texto resumido e estruturar em JSON
                     $analysisText = $api->processPreSummarized($summaryText);
                     $cleanJson = preg_replace('/```json|```/', '', $analysisText);
                     $analysis = json_decode(trim($cleanJson), true);
@@ -85,8 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new Exception("Erro ao processar o resumo. Verifique o formato do texto.");
                     }
                     
-                    // Criar sessão com o conteúdo resumido
-                    $sessionId = $db->createSession($materialName, $summaryText, $analysis['coreTopics']);
+                    $sessionId = $db->createSession($userId, $materialName, $summaryText, $analysis['coreTopics']);
                     $_SESSION['session_id'] = $sessionId;
                     
                     $message = "Resumo processado com sucesso: {$materialName}";
@@ -99,7 +102,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $session = $db->getSession($sessionId);
                     $progress = $db->getProgress($sessionId);
                     
-                    // Selecionar tópico
                     $weakPoints = $progress['weak_points'];
                     $topics = $session['core_topics'];
                     $selectedTopic = null;
@@ -120,7 +122,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     $isWeakPoint = in_array($selectedTopic['id'], $weakPoints);
                     
-                    // Gerar questão
                     $questionText = $api->generateQuestion(
                         $session['pdf_content'],
                         $selectedTopic,
@@ -135,9 +136,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new Exception("Erro ao gerar questão. Tente novamente.");
                     }
                     
-                    // Salvar questão
-                    $questionId = $db->saveQuestion($sessionId, $question, $progress['difficulty_level']);
+                    $questionId = $db->saveQuestion($sessionId, $userId, $question, $progress['difficulty_level']);
                     $_SESSION['current_question'] = $questionId;
+                    
+                    unset($_SESSION['last_answer']);
+                    unset($_SESSION['challenge_result']);
                 }
                 break;
                 
@@ -154,13 +157,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     $isCorrect = $userAnswer == $question['correct_answer'];
                     
-                    // Atualizar estatísticas
                     $correct = $progress['correct_answers'] + ($isCorrect ? 1 : 0);
                     $total = $progress['total_answers'] + 1;
                     $difficulty = $progress['difficulty_level'];
                     $weakPoints = $progress['weak_points'];
                     
-                    // Ajustar dificuldade
                     if ($isCorrect) {
                         $recentCorrect = $total >= 3 && ($correct / $total) >= 0.7;
                         if ($recentCorrect && $difficulty < 5) {
@@ -180,36 +181,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     $_SESSION['last_answer'] = [
                         'correct' => $isCorrect,
-                        'explanation' => $question['explanation']
+                        'explanation' => $question['explanation'],
+                        'question_id' => $questionId,
+                        'correct_answer' => $question['correct_answer'],
+                        'statement' => $question['statement']
                     ];
                     
                     unset($_SESSION['current_question']);
                 }
                 break;
                 
-            case 'reset':
-                // Salvar dados de login antes de limpar
-                $username = $_SESSION['username'] ?? null;
-                $loginTime = $_SESSION['login_time'] ?? null;
-                $lastActivity = $_SESSION['last_activity'] ?? null;
-                $loggedIn = $_SESSION['logged_in'] ?? null;
-                $aiProvider = $_SESSION['ai_provider'] ?? null;
+            case 'challenge':
+                if (isset($_POST['question_id']) && isset($_POST['argument'])) {
+                    try {
+                        $questionId = $_POST['question_id'];
+                        $argument = trim($_POST['argument']);
+                        
+                        if (empty($argument)) {
+                            throw new Exception("Por favor, forneça sua argumentação.");
+                        }
+                        
+                        if (strlen($argument) < 20) {
+                            throw new Exception("Sua argumentação deve ter pelo menos 20 caracteres.");
+                        }
+                        
+                        $challengeAgent = new ChallengeAgent();
+                        $result = $challengeAgent->processChallenge($questionId, $userId, $argument);
+                        
+                        $_SESSION['challenge_result'] = $result;
+                        
+                        if ($result['decision'] === 'accepted') {
+                            $message = "✅ Questionamento ACEITO! O gabarito foi corrigido.";
+                        } else {
+                            $message = "📋 Questionamento analisado. Veja os detalhes abaixo.";
+                        }
+                        
+                    } catch (Exception $e) {
+                        $error = $e->getMessage();
+                    }
+                }
+                break;
                 
-                // Limpar apenas dados da sessão de estudo
+            case 'reset':
                 unset($_SESSION['session_id']);
                 unset($_SESSION['current_question']);
                 unset($_SESSION['last_answer']);
-                
-                // Restaurar dados de login
-                if ($loggedIn) {
-                    $_SESSION['logged_in'] = $loggedIn;
-                    $_SESSION['username'] = $username;
-                    $_SESSION['login_time'] = $loginTime;
-                    $_SESSION['last_activity'] = time(); // Atualiza atividade
-                    if ($aiProvider) {
-                        $_SESSION['ai_provider'] = $aiProvider;
-                    }
-                }
+                unset($_SESSION['challenge_result']);
                 
                 header('Location: index.php');
                 exit;
@@ -224,6 +241,7 @@ $session = null;
 $progress = null;
 $currentQuestion = null;
 $lastAnswer = $_SESSION['last_answer'] ?? null;
+$challengeResult = $_SESSION['challenge_result'] ?? null;
 
 if (isset($_SESSION['session_id'])) {
     $session = $db->getSession($_SESSION['session_id']);
@@ -234,11 +252,6 @@ if (isset($_SESSION['session_id'])) {
     }
 }
 
-// Limpar feedback após exibir
-if (isset($_SESSION['last_answer'])) {
-    unset($_SESSION['last_answer']);
-}
-
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -247,18 +260,83 @@ if (isset($_SESSION['last_answer'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema RAG de Estudos Inteligente</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Overlay de Loading */
+        #loadingOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+        
+        #loadingOverlay.active {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid #fff;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .pulse-text {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Desabilitar interações durante loading */
+        body.loading {
+            pointer-events: none;
+        }
+        
+        body.loading #loadingOverlay {
+            pointer-events: all;
+        }
+    </style>
 </head>
 <body class="bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 min-h-screen p-4">
+    
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="text-center">
+            <div class="spinner mx-auto mb-6"></div>
+            <div class="text-white text-xl font-bold pulse-text" id="loadingText">
+                Processando...
+            </div>
+            <div class="text-indigo-200 text-sm mt-2">
+                Por favor, aguarde
+            </div>
+        </div>
+    </div>
     
     <!-- Header com Info do Usuário -->
     <div class="max-w-4xl mx-auto mb-4">
         <div class="bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 flex justify-between items-center text-white text-sm">
             <div class="flex items-center gap-4">
-                <span>👤 <?= htmlspecialchars(Auth::getUsername()) ?></span>
+                <span>👤 <?= htmlspecialchars(Auth::getUserName()) ?></span>
                 <span>⏱️ <?= Auth::getSessionDuration() ?></span>
                 
                 <!-- Seletor de Provedor -->
-                <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2">
+                <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2" onsubmit="showLoading('Alterando provedor...')">
                     <span>🤖</span>
                     <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 [&_option]:text-black [&_option]:bg-white">
                         <?php foreach (getAvailableProviders() as $key => $name): ?>
@@ -270,11 +348,16 @@ if (isset($_SESSION['last_answer'])) {
                 </form>
             </div>
             
-            <form method="POST" action="logout.php" class="inline">
-                <button type="submit" class="px-3 py-1 bg-red-500/80 hover:bg-red-600 rounded transition-colors">
-                    Sair →
-                </button>
-            </form>
+            <div class="flex items-center gap-2">
+                <a href="reports.php" class="px-3 py-1 bg-blue-500/80 hover:bg-blue-600 rounded transition-colors">
+                    📊 Relatórios
+                </a>
+                <form method="POST" action="logout.php" class="inline">
+                    <button type="submit" class="px-3 py-1 bg-red-500/80 hover:bg-red-600 rounded transition-colors">
+                        Sair →
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
     
@@ -316,13 +399,13 @@ if (isset($_SESSION['last_answer'])) {
 
                 <!-- Tab 1: Upload de PDF -->
                 <div id="content-pdf">
-                    <form method="POST" action="?action=upload" enctype="multipart/form-data" class="border-4 border-dashed border-indigo-300 rounded-xl p-12 text-center hover:border-indigo-500 transition-colors">
+                    <form method="POST" action="?action=upload" enctype="multipart/form-data" id="pdfUploadForm" class="border-4 border-dashed border-indigo-300 rounded-xl p-12 text-center hover:border-indigo-500 transition-colors">
                         <div class="text-5xl mb-4">📄</div>
                         <label class="cursor-pointer">
                             <span class="text-lg font-semibold text-indigo-600 hover:text-indigo-700">
                                 Clique para fazer upload do PDF
                             </span>
-                            <input type="file" name="pdf" accept="application/pdf" required class="hidden" onchange="this.form.submit()">
+                            <input type="file" name="pdf" accept="application/pdf" required class="hidden" onchange="handlePdfUpload(this)">
                         </label>
                         <p class="text-sm text-gray-500 mt-2">
                             O sistema identificará os 20% mais importantes do conteúdo
@@ -335,7 +418,7 @@ if (isset($_SESSION['last_answer'])) {
 
                 <!-- Tab 2: Texto Resumido -->
                 <div id="content-text" class="hidden">
-                    <form method="POST" action="?action=upload_text">
+                    <form method="POST" action="?action=upload_text" onsubmit="showLoading('Processando resumo...')">
                         <div class="mb-4">
                             <label class="block text-sm font-semibold text-gray-700 mb-2">
                                 Cole aqui o resumo 80/20 gerado por outra LLM:
@@ -346,22 +429,15 @@ if (isset($_SESSION['last_answer'])) {
                                 required
                                 placeholder="Exemplo:
 
-Tópico 1: Conceitos Fundamentais de Direito Constitucional
-- Ponto-chave 1: Princípios constitucionais básicos
-- Ponto-chave 2: Hierarquia das normas
-- Ponto-chave 3: Controle de constitucionalidade
+Tópico 1: Conceitos Fundamentais
+- Ponto-chave 1: ...
+- Ponto-chave 2: ...
 
-Tópico 2: Direitos e Garantias Fundamentais
-- Ponto-chave 1: Direitos individuais
-- Ponto-chave 2: Direitos sociais
-- Ponto-chave 3: Remédios constitucionais
-
+Tópico 2: Direitos Fundamentais
+- Ponto-chave 1: ...
 ..."
                                 class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors font-mono text-sm"
                             ></textarea>
-                            <p class="text-xs text-gray-500 mt-2">
-                                💡 Dica: Cole o conteúdo já processado com os tópicos essenciais identificados
-                            </p>
                         </div>
                         
                         <div class="mb-6">
@@ -388,22 +464,27 @@ Tópico 2: Direitos e Garantias Fundamentais
 
             <script>
                 function showTab(tab) {
-                    // Esconder todos os conteúdos
                     document.getElementById('content-pdf').classList.add('hidden');
                     document.getElementById('content-text').classList.add('hidden');
                     
-                    // Remover estilos ativos de todas as tabs
                     document.getElementById('tab-pdf').classList.remove('text-indigo-600', 'border-indigo-600');
                     document.getElementById('tab-pdf').classList.add('text-gray-500', 'border-transparent');
                     document.getElementById('tab-text').classList.remove('text-indigo-600', 'border-indigo-600');
                     document.getElementById('tab-text').classList.add('text-gray-500', 'border-transparent');
                     
-                    // Mostrar conteúdo selecionado
                     document.getElementById('content-' + tab).classList.remove('hidden');
                     
-                    // Ativar tab selecionada
                     document.getElementById('tab-' + tab).classList.remove('text-gray-500', 'border-transparent');
                     document.getElementById('tab-' + tab).classList.add('text-indigo-600', 'border-indigo-600');
+                }
+                
+                function handlePdfUpload(input) {
+                    if (input.files && input.files[0]) {
+                        showLoading('Extraindo texto do PDF...');
+                        setTimeout(() => {
+                            document.getElementById('pdfUploadForm').submit();
+                        }, 100);
+                    }
                 }
             </script>
         <?php else: ?>
@@ -495,7 +576,7 @@ Tópico 2: Direitos e Garantias Fundamentais
                 <?php if (!$currentQuestion && !$lastAnswer): ?>
                     <div class="text-center py-12">
                         <div class="text-6xl mb-4">💡</div>
-                        <form method="POST" action="?action=generate">
+                        <form method="POST" action="?action=generate" onsubmit="showLoading('Gerando questão personalizada...')">
                             <button type="submit" class="px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold text-lg hover:shadow-lg transform hover:scale-105 transition-all">
                                 Gerar Questão
                             </button>
@@ -512,7 +593,7 @@ Tópico 2: Direitos e Garantias Fundamentais
                             </p>
                         </div>
 
-                        <form method="POST" action="?action=answer" class="flex gap-4">
+                        <form method="POST" action="?action=answer" onsubmit="showLoading('Processando resposta...')" class="flex gap-4">
                             <button type="submit" name="answer" value="true" class="flex-1 py-4 bg-green-500 text-white rounded-xl font-bold text-lg hover:bg-green-600 transition-colors">
                                 ✓ CERTO
                             </button>
@@ -523,13 +604,160 @@ Tópico 2: Direitos e Garantias Fundamentais
                     </div>
                 <?php elseif ($lastAnswer): ?>
                     <div>
+                        <!-- Questão Original -->
+                        <div class="mb-4 p-4 bg-gray-50 border-2 border-gray-200 rounded-lg">
+                            <p class="text-sm font-semibold text-gray-700 mb-2">📝 Questão:</p>
+                            <p class="text-gray-800"><?= htmlspecialchars($lastAnswer['statement']) ?></p>
+                        </div>
+
+                        <!-- Feedback da Resposta -->
                         <div class="p-6 rounded-xl mb-4 <?= $lastAnswer['correct'] ? 'bg-green-50 border-2 border-green-200' : 'bg-red-50 border-2 border-red-200' ?>">
                             <p class="text-lg leading-relaxed text-gray-700">
                                 <strong><?= $lastAnswer['correct'] ? '✓ CORRETO!' : '✗ ERRADO.' ?></strong><br>
                                 <?= htmlspecialchars($lastAnswer['explanation']) ?>
                             </p>
                         </div>
-                        <form method="POST" action="?action=generate">
+                        
+                        <!-- Botão de Questionamento -->
+                        <?php if (getConfig('ALLOW_QUESTION_CHALLENGE', 'true') === 'true' && !$challengeResult): ?>
+                            <div class="mb-4 p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded">
+                                <div class="flex items-start gap-3">
+                                    <div class="text-2xl">🤔</div>
+                                    <div class="flex-1">
+                                        <p class="text-sm font-semibold text-yellow-800 mb-2">
+                                            Discorda do gabarito?
+                                        </p>
+                                        <p class="text-xs text-yellow-700 mb-3">
+                                            Nosso Agente Questionador vai pesquisar na internet e verificar sua argumentação.
+                                        </p>
+                                        <button 
+                                            onclick="document.getElementById('challengeForm').classList.toggle('hidden')"
+                                            class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 text-sm font-semibold transition-colors"
+                                        >
+                                            ⚖️ Questionar Gabarito
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Formulário de Questionamento -->
+                                <div id="challengeForm" class="hidden mt-4 pt-4 border-t border-yellow-300">
+                                    <form method="POST" action="?action=challenge" id="challengeSubmitForm">
+                                        <input type="hidden" name="question_id" value="<?= $lastAnswer['question_id'] ?>">
+                                        
+                                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                            Sua Argumentação:
+                                        </label>
+                                        <textarea 
+                                            name="argument" 
+                                            rows="4" 
+                                            required
+                                            minlength="20"
+                                            placeholder="Explique por que você acredita que o gabarito está incorreto. Seja específico e forneça argumentos sólidos..."
+                                            class="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-yellow-500 focus:ring-2 focus:ring-yellow-200 text-sm"
+                                        ></textarea>
+                                        
+                                        <div class="flex gap-2 mt-3">
+                                            <button 
+                                                type="button"
+                                                onclick="submitChallenge()"
+                                                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold text-sm transition-colors"
+                                            >
+                                                🔍 Enviar para Análise
+                                            </button>
+                                            <button 
+                                                type="button"
+                                                onclick="document.getElementById('challengeForm').classList.add('hidden')"
+                                                class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 font-semibold text-sm transition-colors"
+                                            >
+                                                Cancelar
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <!-- Resultado do Questionamento -->
+                        <?php if ($challengeResult): ?>
+                            <div class="mb-4 p-6 rounded-xl border-2 <?= $challengeResult['decision'] === 'accepted' ? 'bg-green-50 border-green-300' : 'bg-orange-50 border-orange-300' ?>">
+                                <div class="flex items-start gap-3 mb-4">
+                                    <div class="text-3xl"><?= $challengeResult['decision'] === 'accepted' ? '✅' : '📋' ?></div>
+                                    <div class="flex-1">
+                                        <h3 class="font-bold text-lg <?= $challengeResult['decision'] === 'accepted' ? 'text-green-800' : 'text-orange-800' ?> mb-2">
+                                            <?= $challengeResult['decision'] === 'accepted' ? 'Questionamento ACEITO!' : 'Análise do Questionamento' ?>
+                                        </h3>
+                                        <p class="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                                            <?= htmlspecialchars($challengeResult['analysis']) ?>
+                                        </p>
+                                    </div>
+                                </div>
+                                
+                                <!-- Fontes Web -->
+                                <?php if (!empty($challengeResult['web_sources'])): ?>
+                                    <div class="mt-4 pt-4 border-t <?= $challengeResult['decision'] === 'accepted' ? 'border-green-200' : 'border-orange-200' ?>">
+                                        <p class="text-xs font-semibold text-gray-600 mb-2">🌐 Fontes consultadas na web:</p>
+                                        <ul class="text-xs text-gray-600 space-y-1">
+                                            <?php 
+                                            $sources = $challengeResult['web_sources'];
+                                            $count = 0;
+                                            foreach ($sources as $key => $source): 
+                                                if ($key === 'tavily_answer' || $count >= 3) continue;
+                                                if (!is_array($source)) continue;
+                                                $count++;
+                                            ?>
+                                                <li>
+                                                    • <a href="<?= htmlspecialchars($source['url'] ?? '#') ?>" target="_blank" class="text-indigo-600 hover:underline">
+                                                        <?= htmlspecialchars($source['title'] ?? 'Fonte sem título') ?>
+                                                    </a>
+                                                    <?php if (isset($source['score'])): ?>
+                                                        <span class="text-gray-400">(<?= round($source['score'] * 100) ?>% relevância)</span>
+                                                    <?php endif; ?>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                        
+                                        <?php if (isset($sources['tavily_answer'])): ?>
+                                            <div class="mt-3 p-3 bg-white/50 rounded text-xs text-gray-700">
+                                                <strong>Resumo Tavily:</strong><br>
+                                                <?= htmlspecialchars(substr($sources['tavily_answer'], 0, 300)) ?><?= strlen($sources['tavily_answer']) > 300 ? '...' : '' ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
+                                
+                                <!-- Gabarito Atualizado -->
+                                <?php if ($challengeResult['decision'] === 'accepted' && isset($challengeResult['updated_explanation'])): ?>
+                                    <div class="mt-4 pt-4 border-t border-green-200">
+                                        <p class="text-xs font-semibold text-green-800 mb-2">✏️ Gabarito Corrigido:</p>
+                                        <div class="p-3 bg-white rounded-lg border-2 border-green-300">
+                                            <p class="text-sm text-gray-700">
+                                                <strong>Resposta correta:</strong> 
+                                                <span class="inline-block px-2 py-1 rounded <?= $challengeResult['updated_answer'] ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800' ?>">
+                                                    <?= $challengeResult['updated_answer'] ? 'CERTO ✓' : 'ERRADO ✗' ?>
+                                                </span>
+                                            </p>
+                                            <p class="text-sm text-gray-700 mt-2">
+                                                <?= htmlspecialchars($challengeResult['updated_explanation']) ?>
+                                            </p>
+                                        </div>
+                                        <p class="text-xs text-green-700 mt-2 flex items-center gap-1">
+                                            <span>ℹ️</span>
+                                            <span>Suas estatísticas foram recalculadas automaticamente. Parabéns por contribuir para melhorar o sistema!</span>
+                                        </p>
+                                    </div>
+                                <?php elseif ($challengeResult['decision'] === 'rejected'): ?>
+                                    <div class="mt-4 pt-4 border-t border-orange-200">
+                                        <p class="text-xs text-orange-700 flex items-center gap-1">
+                                            <span>💡</span>
+                                            <span>O gabarito original foi mantido. Continue estudando e, se tiver novas evidências, pode questionar novamente.</span>
+                                        </p>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <!-- Botão Próxima Questão -->
+                        <form method="POST" action="?action=generate" onsubmit="showLoading('Gerando próxima questão...')">
                             <button type="submit" class="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold text-lg hover:shadow-lg transition-all">
                                 Próxima Questão →
                             </button>
@@ -543,8 +771,94 @@ Tópico 2: Direitos e Garantias Fundamentais
             <p class="text-sm opacity-75">
                 Sistema RAG com IA • Princípio de Pareto (80/20) • Questões Adaptativas CESPE
             </p>
+            <p class="text-xs opacity-60 mt-1">
+                v2.1.2 - Com Sistema de Loading Inteligente
+            </p>
         </div>
     </div>
+
+    <script>
+        // Sistema de Loading Global
+        let loadingOverlay = null;
+        let loadingText = null;
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            loadingOverlay = document.getElementById('loadingOverlay');
+            loadingText = document.getElementById('loadingText');
+        });
+        
+        function showLoading(message = 'Processando...') {
+            if (loadingOverlay && loadingText) {
+                loadingText.textContent = message;
+                loadingOverlay.classList.add('active');
+                document.body.classList.add('loading');
+            }
+        }
+        
+        function hideLoading() {
+            if (loadingOverlay) {
+                loadingOverlay.classList.remove('active');
+                document.body.classList.remove('loading');
+            }
+        }
+        
+        // Função específica para questionamento
+        function submitChallenge() {
+            const form = document.getElementById('challengeSubmitForm');
+            const textarea = form.querySelector('textarea[name="argument"]');
+            
+            // Validação
+            if (!textarea.value || textarea.value.trim().length < 20) {
+                alert('Sua argumentação deve ter pelo menos 20 caracteres.');
+                return;
+            }
+            
+            // Mostrar loading com mensagem específica
+            showLoading('🔍 Buscando informações na web...');
+            
+            // Simular etapas do processo
+            setTimeout(() => {
+                loadingText.textContent = '🤖 Analisando com IA...';
+            }, 2000);
+            
+            setTimeout(() => {
+                loadingText.textContent = '⚖️ Verificando gabarito...';
+            }, 4000);
+            
+            // Submeter formulário
+            form.submit();
+        }
+        
+        // Auto-hide loading após carregamento da página
+        window.addEventListener('load', function() {
+            setTimeout(hideLoading, 500);
+        });
+        
+        // Prevenir múltiplos cliques em todos os formulários
+        const forms = document.querySelectorAll('form');
+        forms.forEach(form => {
+            let submitted = false;
+            form.addEventListener('submit', function(e) {
+                if (submitted) {
+                    e.preventDefault();
+                    return false;
+                }
+                submitted = true;
+                
+                // Reset após 5 segundos (caso algo dê errado)
+                setTimeout(() => {
+                    submitted = false;
+                }, 5000);
+            });
+        });
+        
+        // Mostrar loading ao voltar com histórico do navegador
+        window.addEventListener('pageshow', function(event) {
+            if (event.persisted) {
+                hideLoading();
+            }
+        });
+    </script>
 
 </body>
 </html>

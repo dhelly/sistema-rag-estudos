@@ -165,7 +165,7 @@ Retorne APENAS JSON (sem markdown):
         return $this->sendMessage($prompt);
     }
     
-    private function sendMessage($prompt) {
+    public function sendMessage($prompt) {
         switch ($this->provider) {
             case 'anthropic':
                 return $this->makeAnthropicRequest([

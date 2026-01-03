@@ -1,3 +1,4 @@
 *.pem
 *.db
 .env
+reports/*.html
