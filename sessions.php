@@ -122,21 +122,61 @@ $avgPercentage = $totalQuestions > 0 ? round(($totalCorrect / $totalQuestions) *
 <body class="bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 min-h-screen p-4">
     
     <!-- Header -->
-    <div class="max-w-7xl mx-auto mb-4">
+    <?php
+    // Buscar contagem de usuários pendentes (apenas para admins)
+    $pendingUsersCount = 0;
+    if (Auth::isAdmin()) {
+        $pendingUsersCount = $db->countPendingUsers();
+    }
+    ?>
+
+    <!-- Header -->
+    <div class="max-w-4xl mx-auto mb-4">
         <div class="bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 flex justify-between items-center text-white text-sm">
             <div class="flex items-center gap-4">
-                <a href="index.php" class="hover:text-indigo-200 flex items-center gap-1">
-                    ← Voltar ao Estudo
-                </a>
                 <span>👤 <?= htmlspecialchars(Auth::getUserName()) ?></span>
+                <span>⏱️ <?= Auth::getSessionDuration() ?></span>
+                
+                <!-- Seletor de Provedor (apenas em index.php) -->
+                <?php if (basename($_SERVER['PHP_SELF']) === 'index.php'): ?>
+                <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2" onsubmit="showLoading('Alterando provedor...')">
+                    <span>🤖</span>
+                    <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 [&_option]:text-black [&_option]:bg-white">
+                        <?php foreach (getAvailableProviders() as $key => $name): ?>
+                            <option value="<?= $key ?>" <?= getCurrentProvider() === $key ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($name) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </form>
+                <?php endif; ?>
             </div>
+            
             <div class="flex items-center gap-2">
+                <?php if (Auth::isAdmin()): ?>
+                    <a href="admin_users.php" class="px-3 py-1 bg-purple-500/80 hover:bg-purple-600 rounded transition-colors flex items-center gap-1">
+                        👑 Admin
+                        <?php if ($pendingUsersCount > 0): ?>
+                            <span class="ml-1 px-2 py-0.5 bg-orange-500 text-white rounded-full text-xs font-bold">
+                                <?= $pendingUsersCount ?>
+                            </span>
+                        <?php endif; ?>
+                    </a>
+                <?php endif; ?>
+                
+                <?php if (isset($userSessionsCount) && $userSessionsCount > 0): ?>
+                    <a href="sessions.php" class="px-3 py-1 bg-indigo-500/80 hover:bg-indigo-600 rounded transition-colors flex items-center gap-1">
+                        📚 Sessões (<?= $userSessionsCount ?>)
+                    </a>
+                <?php endif; ?>
+                
                 <a href="reports.php" class="px-3 py-1 bg-blue-500/80 hover:bg-blue-600 rounded transition-colors">
                     📊 Relatórios
                 </a>
+                
                 <form method="POST" action="logout.php" class="inline">
                     <button type="submit" class="px-3 py-1 bg-red-500/80 hover:bg-red-600 rounded transition-colors">
-                        Sair
+                        Sair →
                     </button>
                 </form>
             </div>
