@@ -43,6 +43,27 @@ class Database {
             die("Erro ao conectar MySQL: " . $e->getMessage());
         }
     }
+
+    /**
+     * Verifica se uma coluna existe
+     */
+    private function columnExists($table, $column) {
+        try {
+            $dbname = getConfig('DB_NAME', 'sistema_rag');
+            $stmt = $this->conn->prepare("
+                SELECT COUNT(*) as count 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_SCHEMA = ? 
+                AND TABLE_NAME = ? 
+                AND COLUMN_NAME = ?
+            ");
+            $stmt->execute([$dbname, $table, $column]);
+            $result = $stmt->fetch();
+            return $result['count'] > 0;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
     
     private function connectSQLite() {
         try {
@@ -180,9 +201,68 @@ class Database {
                 INDEX idx_result (challenge_result)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
+
+        $this->conn->exec("
+            CREATE TABLE IF NOT EXISTS disciplines (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                slug VARCHAR(255) UNIQUE NOT NULL,
+                description TEXT,
+                icon VARCHAR(50) DEFAULT '📚',
+                color VARCHAR(20) DEFAULT 'indigo',
+                is_active BOOLEAN DEFAULT TRUE,
+                created_by INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+                INDEX idx_slug (slug),
+                INDEX idx_active (is_active)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $this->conn->exec("
+            CREATE TABLE IF NOT EXISTS agent_prompts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                discipline_id INT NOT NULL,
+                agent_type ENUM('analyzer', 'generator', 'challenger') NOT NULL,
+                prompt_content TEXT NOT NULL,
+                system_instructions TEXT,
+                examples TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                version INT DEFAULT 1,
+                created_by INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+                UNIQUE KEY idx_discipline_agent (discipline_id, agent_type),
+                INDEX idx_active (is_active)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+        
+        // ADICIONAR COLUNA discipline_id APENAS SE NÃO EXISTIR
+        if (!$this->columnExists('study_sessions', 'discipline_id')) {
+            try {
+                $this->conn->exec("
+                    ALTER TABLE study_sessions 
+                    ADD COLUMN discipline_id INT NULL AFTER user_id,
+                    ADD FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE SET NULL
+                ");
+            } catch (Exception $e) {
+                // Ignora se já existir
+            }
+        }
         
         // Criar usuário admin padrão
         $this->createDefaultAdmin();
+
+        // ==========================================
+        // ATUALIZAR createTables() PARA INCLUIR DISCIPLINAS
+        // Adicione esta linha no final do método createTables()
+        // ==========================================
+
+        // Adicione isto no final de createMySQLTables() e createSQLiteTables():
+        $this->createDefaultDisciplines();
     }
     
     private function createSQLiteTables() {
@@ -270,8 +350,51 @@ class Database {
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ");
+
+        $this->conn->exec("
+            CREATE TABLE IF NOT EXISTS disciplines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
+                description TEXT,
+                icon TEXT DEFAULT '📚',
+                color TEXT DEFAULT 'indigo',
+                is_active INTEGER DEFAULT 1,
+                created_by INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(created_by) REFERENCES users(id)
+            )
+        ");
+
+        $this->conn->exec("
+            CREATE TABLE IF NOT EXISTS agent_prompts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discipline_id INTEGER NOT NULL,
+                agent_type TEXT NOT NULL CHECK(agent_type IN ('analyzer', 'generator', 'challenger')),
+                prompt_content TEXT NOT NULL,
+                system_instructions TEXT,
+                examples TEXT,
+                is_active INTEGER DEFAULT 1,
+                version INTEGER DEFAULT 1,
+                created_by INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(discipline_id) REFERENCES disciplines(id),
+                FOREIGN KEY(created_by) REFERENCES users(id),
+                UNIQUE(discipline_id, agent_type)
+            )
+        ");
         
         $this->createDefaultAdmin();
+
+        // ==========================================
+        // ATUALIZAR createTables() PARA INCLUIR DISCIPLINAS
+        // Adicione esta linha no final do método createTables()
+        // ==========================================
+
+        // Adicione isto no final de createMySQLTables() e createSQLiteTables():
+        $this->createDefaultDisciplines();
     }
     
     private function createDefaultAdmin() {
@@ -874,7 +997,163 @@ class Database {
             ]);
         }
     }
-    
+
+    /**
+     * Cria disciplina padrão se não existir
+     */
+    private function createDefaultDisciplines() {
+        try {
+            $stmt = $this->conn->prepare("SELECT COUNT(*) as count FROM disciplines");
+            $stmt->execute();
+            $result = $stmt->fetch();
+            
+            if ($result['count'] == 0) {
+                // Criar disciplina genérica padrão
+                $disciplines = [
+                    [
+                        'name' => 'Geral / Genérico',
+                        'slug' => 'geral',
+                        'description' => 'Prompts genéricos para qualquer disciplina',
+                        'icon' => '📚',
+                        'color' => 'indigo'
+                    ]
+                ];
+                
+                foreach ($disciplines as $disc) {
+                    $this->createDiscipline(
+                        $disc['name'],
+                        $disc['slug'],
+                        $disc['description'],
+                        $disc['icon'],
+                        $disc['color'],
+                        null
+                    );
+                }
+            }
+        } catch (Exception $e) {
+            // Ignora se já existir
+        }
+    }
+
+    public function createDiscipline($name, $slug, $description = null, $icon = '📚', $color = 'indigo', $createdBy = null) {
+        $stmt = $this->conn->prepare("
+            INSERT INTO disciplines (name, slug, description, icon, color, created_by) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([$name, $slug, $description, $icon, $color, $createdBy]);
+        return $this->conn->lastInsertId();
+    }
+
+    public function getAllDisciplines($activeOnly = false) {
+        $sql = "SELECT * FROM disciplines";
+        if ($activeOnly) {
+            $sql .= " WHERE is_active = 1";
+        }
+        $sql .= " ORDER BY name ASC";
+        
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+
+    public function getDiscipline($id) {
+        $stmt = $this->conn->prepare("SELECT * FROM disciplines WHERE id = ?");
+        $stmt->execute([$id]);
+        return $stmt->fetch();
+    }
+
+    public function getDisciplineBySlug($slug) {
+        $stmt = $this->conn->prepare("SELECT * FROM disciplines WHERE slug = ?");
+        $stmt->execute([$slug]);
+        return $stmt->fetch();
+    }
+
+    public function updateDiscipline($id, $name, $description, $icon, $color, $isActive) {
+        $stmt = $this->conn->prepare("
+            UPDATE disciplines 
+            SET name = ?, description = ?, icon = ?, color = ?, is_active = ?
+            WHERE id = ?
+        ");
+        $stmt->execute([$name, $description, $icon, $color, $isActive ? 1 : 0, $id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function deleteDiscipline($id) {
+        $stmt = $this->conn->prepare("DELETE FROM disciplines WHERE id = ?");
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    // ==========================================
+    // MÉTODOS DE PROMPTS DE AGENTES
+    // ==========================================
+
+    public function getAgentPrompt($disciplineId, $agentType) {
+        $stmt = $this->conn->prepare("
+            SELECT * FROM agent_prompts 
+            WHERE discipline_id = ? AND agent_type = ? AND is_active = 1
+        ");
+        $stmt->execute([$disciplineId, $agentType]);
+        $prompt = $stmt->fetch();
+        
+        // Se não encontrar prompt específico, busca da disciplina geral
+        if (!$prompt) {
+            $general = $this->getDisciplineBySlug('geral');
+            if ($general) {
+                $stmt = $this->conn->prepare("
+                    SELECT * FROM agent_prompts 
+                    WHERE discipline_id = ? AND agent_type = ? AND is_active = 1
+                ");
+                $stmt->execute([$general['id'], $agentType]);
+                $prompt = $stmt->fetch();
+            }
+        }
+        
+        return $prompt;
+    }
+
+    public function saveAgentPrompt($disciplineId, $agentType, $promptContent, $systemInstructions = null, $examples = null, $createdBy = null) {
+        // Verifica se já existe
+        $existing = $this->getAgentPrompt($disciplineId, $agentType);
+        
+        if ($existing) {
+            // Atualizar
+            $stmt = $this->conn->prepare("
+                UPDATE agent_prompts 
+                SET prompt_content = ?, 
+                    system_instructions = ?, 
+                    examples = ?,
+                    version = version + 1
+                WHERE discipline_id = ? AND agent_type = ?
+            ");
+            $stmt->execute([$promptContent, $systemInstructions, $examples, $disciplineId, $agentType]);
+            return $existing['id'];
+        } else {
+            // Criar novo
+            $stmt = $this->conn->prepare("
+                INSERT INTO agent_prompts (discipline_id, agent_type, prompt_content, system_instructions, examples, created_by) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([$disciplineId, $agentType, $promptContent, $systemInstructions, $examples, $createdBy]);
+            return $this->conn->lastInsertId();
+        }
+    }
+
+    public function getAllPromptsForDiscipline($disciplineId) {
+        $stmt = $this->conn->prepare("
+            SELECT * FROM agent_prompts 
+            WHERE discipline_id = ? 
+            ORDER BY agent_type ASC
+        ");
+        $stmt->execute([$disciplineId]);
+        return $stmt->fetchAll();
+    }
+
+    public function getPromptHistory($disciplineId, $agentType, $limit = 10) {
+        // Futura implementação: histórico de versões
+        return [];
+    }
+   
     public function __destruct() {
         $this->conn = null;
     }

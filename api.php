@@ -11,10 +11,14 @@ require_once 'config.php';
 class UnifiedAI {
     private $provider;
     private $config;
+    private $db;
+    private $disciplineId;
     
-    public function __construct($provider = null) {
+    public function __construct($provider = null, $disciplineId = null) {
         $this->provider = $provider ?? getCurrentProvider();
         $this->config = getProviderConfig($this->provider);
+        $this->disciplineId = $disciplineId;
+        $this->db = new Database();
         
         if (!$this->config) {
             throw new Exception("Provedor '{$this->provider}' não configurado!");
@@ -62,30 +66,65 @@ class UnifiedAI {
         
         return $this->makeAnthropicRequest($data);
     }
-    
+
+    /**
+     * Obtém prompt customizado ou usa o padrão
+     */
+    private function getCustomPrompt($agentType, $defaultPrompt) {
+        if (!$this->disciplineId) {
+            return $defaultPrompt;
+        }
+        
+        $promptData = $this->db->getAgentPrompt($this->disciplineId, $agentType);
+        
+        if ($promptData && !empty($promptData['prompt_content'])) {
+            return $promptData['prompt_content'];
+        }
+        
+        return $defaultPrompt;
+    }
+
+    /**
+     * Substitui variáveis no prompt
+     */
+    private function replacePromptVariables($prompt, $variables = []) {
+        foreach ($variables as $key => $value) {
+            $prompt = str_replace('{' . $key . '}', $value, $prompt);
+        }
+        return $prompt;
+}
+
     public function analyzeContent($content) {
         $contentLimited = substr($content, 0, 15000);
         
-        $prompt = "Você é um Agente Analisador especializado em identificar os 20% de conteúdo mais importantes que geram 80% dos resultados (Princípio de Pareto).
+        $defaultPrompt = "Você é um Agente Analisador especializado em identificar os 20% de conteúdo mais importantes que geram 80% dos resultados (Princípio de Pareto).
 
-Analise este material de estudo e identifique os tópicos ESSENCIAIS:
+    Analise este material de estudo e identifique os tópicos ESSENCIAIS:
 
-{$contentLimited}
+    {content}
 
-Retorne APENAS um JSON (sem markdown, sem explicações) com esta estrutura:
-{
-  \"coreTopics\": [
+    Retorne APENAS um JSON (sem markdown, sem explicações) com esta estrutura:
     {
-      \"id\": 1,
-      \"title\": \"Título conciso do tópico\",
-      \"importance\": \"Alta\",
-      \"keyPoints\": [\"ponto 1\", \"ponto 2\", \"ponto 3\"],
-      \"difficulty\": 1
+    \"coreTopics\": [
+        {
+        \"id\": 1,
+        \"title\": \"Título conciso do tópico\",
+        \"importance\": \"Alta\",
+        \"keyPoints\": [\"ponto 1\", \"ponto 2\", \"ponto 3\"],
+        \"difficulty\": 1
+        }
+    ]
     }
-  ]
-}
 
-Identifique 4-6 tópicos fundamentais, não mais que isso.";
+    Identifique 4-6 tópicos fundamentais, não mais que isso.";
+
+        // Buscar prompt customizado
+        $prompt = $this->getCustomPrompt('analyzer', $defaultPrompt);
+        
+        // Substituir variáveis
+        $prompt = $this->replacePromptVariables($prompt, [
+            'content' => $contentLimited
+        ]);
 
         return $this->sendMessage($prompt);
     }
@@ -136,31 +175,45 @@ INSTRUÇÕES:
         $keyPoints = implode(', ', $topic['keyPoints']);
         $contentLimited = substr($pdfContent, 0, 10000);
         
-        $prompt = "Você é um Agente Gerador de Questões especializado em criar questões estilo CESPE (Certo/Errado).
+        $defaultPrompt = "Você é um Agente Gerador de Questões especializado em criar questões estilo CESPE (Certo/Errado).
 
-Conteúdo de referência:
-{$contentLimited}
+    Conteúdo de referência:
+    {content}
 
-Tópico foco: {$topic['title']}
-Pontos-chave: {$keyPoints}
+    Tópico foco: {topic_title}
+    Pontos-chave: {key_points}
 
-Nível de dificuldade: {$difficulty}/5
-{$weakPointNote}
+    Nível de dificuldade: {difficulty}/5
+    {weak_point_note}
 
-Crie uma questão CESPE seguindo estas diretrizes:
-- Dificuldade {$difficulty}: {$difficultyDesc[$difficulty]}
-- Seja preciso e técnico
-- Use termos do próprio material
-- Para dificuldade 3+: inclua pegadinhas sutis
+    Crie uma questão CESPE seguindo estas diretrizes:
+    - Dificuldade {difficulty}: {difficulty_desc}
+    - Seja preciso e técnico
+    - Use termos do próprio material
+    - Para dificuldade 3+: inclua pegadinhas sutis
 
-Retorne APENAS JSON (sem markdown):
-{
-  \"statement\": \"afirmação da questão\",
-  \"correctAnswer\": true,
-  \"topicId\": {$topic['id']},
-  \"explanation\": \"explicação detalhada\",
-  \"keyConceptTested\": \"conceito principal\"
-}";
+    Retorne APENAS JSON (sem markdown):
+    {
+    \"statement\": \"afirmação da questão\",
+    \"correctAnswer\": true,
+    \"topicId\": {topic_id},
+    \"explanation\": \"explicação detalhada\",
+    \"keyConceptTested\": \"conceito principal\"
+    }";
+
+        // Buscar prompt customizado
+        $prompt = $this->getCustomPrompt('generator', $defaultPrompt);
+        
+        // Substituir variáveis
+        $prompt = $this->replacePromptVariables($prompt, [
+            'content' => $contentLimited,
+            'topic_title' => $topic['title'],
+            'key_points' => $keyPoints,
+            'difficulty' => $difficulty,
+            'difficulty_desc' => $difficultyDesc[$difficulty],
+            'weak_point_note' => $weakPointNote,
+            'topic_id' => $topic['id']
+        ]);
 
         return $this->sendMessage($prompt);
     }
@@ -318,5 +371,62 @@ Retorne APENAS JSON (sem markdown):
         }
         
         return null;
+    }
+
+    public function getChallengePrompt($question, $userArgument, $webContext, $disciplineId = null) {
+        $this->disciplineId = $disciplineId;
+        
+        $defaultPrompt = "Você é um Agente Questionador especializado em validar gabaritos de questões estilo CESPE.
+
+    QUESTÃO ORIGINAL:
+    Afirmação: {statement}
+    Gabarito atual: {current_answer}
+    Explicação atual: {explanation}
+    Conceito testado: {key_concept}
+
+    QUESTIONAMENTO DO ALUNO:
+    {user_argument}
+
+    FONTES DA WEB (Tavily Search):
+    {web_sources}
+
+    INSTRUÇÕES:
+    1. Analise cuidadosamente o questionamento do aluno
+    2. Considere as fontes da web encontradas
+    3. Verifique se há erro no gabarito original
+    4. Se o aluno tiver razão, sugira o gabarito correto e nova explicação
+    5. Se o aluno estiver errado, explique por que o gabarito está correto
+
+    Retorne APENAS JSON (sem markdown):
+    {
+    \"decision\": \"accepted\" ou \"rejected\",
+    \"confidence\": 0.0 a 1.0,
+    \"analysis\": \"análise detalhada do questionamento\",
+    \"reasoning\": \"raciocínio baseado nas fontes web\",
+    \"suggested_answer\": true ou false (apenas se decision = accepted),
+    \"updated_explanation\": \"nova explicação\" (apenas se decision = accepted),
+    \"key_sources\": [\"fonte1\", \"fonte2\"]
+    }
+
+    IMPORTANTE:
+    - Seja rigoroso: só aceite se tiver certeza absoluta
+    - Confidence < 0.7 = rejeitar automaticamente
+    - Cite as fontes web na análise
+    - Mantenha tom educativo e respeitoso";
+
+        // Buscar prompt customizado
+        $prompt = $this->getCustomPrompt('challenger', $defaultPrompt);
+        
+        // Substituir variáveis
+        $prompt = $this->replacePromptVariables($prompt, [
+            'statement' => $question['statement'],
+            'current_answer' => $question['correct_answer'] ? 'CERTO' : 'ERRADO',
+            'explanation' => $question['explanation'],
+            'key_concept' => $question['key_concept'],
+            'user_argument' => $userArgument,
+            'web_sources' => $webContext
+        ]);
+        
+        return $prompt;
     }
 }
