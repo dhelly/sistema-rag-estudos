@@ -241,6 +241,29 @@ if (isset($_SESSION['session_id'])) {
 $userSessionsCount = count($db->getUserSessions($userId, 100));
 
 ?>
+
+<?php
+    // ==========================================
+    // PREPARAÇÃO DO HEADER
+    // ==========================================
+    $pendingUsersCount = 0;
+    if (Auth::isAdmin()) {
+        if (!isset($db)) {
+            $db = new Database();
+        }
+        $pendingUsersCount = $db->countPendingUsers();
+    }
+
+    if (!isset($userSessionsCount)) {
+        if (!isset($db)) {
+            $db = new Database();
+        }
+        $userSessionsCount = count($db->getUserSessions(Auth::getUserId(), 100));
+    }
+
+    $currentPage = basename($_SERVER['PHP_SELF']);
+?>
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -297,6 +320,37 @@ $userSessionsCount = count($db->getUserSessions($userId, 100));
         body.loading #loadingOverlay {
             pointer-events: all;
         }
+
+        /* Animação de slide down */
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-slideDown {
+            animation: slideDown 0.2s ease-out;
+        }
+
+        /* Badge animado "Novo!" */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        /* Rotação da seta */
+        .rotate-180 {
+            transform: rotate(180deg);
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 min-h-screen p-4">
@@ -323,15 +377,18 @@ $userSessionsCount = count($db->getUserSessions($userId, 100));
     }
     ?>
 
-    <!-- Header -->
-    <div class="max-w-4xl mx-auto mb-4">
+    <!-- ========================================== -->
+    <!-- HEADER UNIVERSAL COM DROPDOWN CLICK -->
+    <!-- ========================================== -->
+    <div class="max-w-7xl mx-auto mb-4">
         <div class="bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 flex justify-between items-center text-white text-sm">
+            <!-- Lado Esquerdo -->
             <div class="flex items-center gap-4">
                 <span>👤 <?= htmlspecialchars(Auth::getUserName()) ?></span>
                 <span>⏱️ <?= Auth::getSessionDuration() ?></span>
                 
                 <!-- Seletor de Provedor (apenas em index.php) -->
-                <?php if (basename($_SERVER['PHP_SELF']) === 'index.php'): ?>
+                <?php if ($currentPage === 'index.php'): ?>
                 <form method="POST" action="?action=change_provider" class="inline-flex items-center gap-2" onsubmit="showLoading('Alterando provedor...')">
                     <span>🤖</span>
                     <select name="provider" onchange="this.form.submit()" class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 [&_option]:text-black [&_option]:bg-white">
@@ -345,28 +402,85 @@ $userSessionsCount = count($db->getUserSessions($userId, 100));
                 <?php endif; ?>
             </div>
             
+            <!-- Lado Direito -->
             <div class="flex items-center gap-2">
+                <!-- DROPDOWN ADMIN (CLICK) -->
                 <?php if (Auth::isAdmin()): ?>
-                    <a href="admin_users.php" class="px-3 py-1 bg-purple-500/80 hover:bg-purple-600 rounded transition-colors flex items-center gap-1">
-                        👑 Admin
-                        <?php if ($pendingUsersCount > 0): ?>
-                            <span class="ml-1 px-2 py-0.5 bg-orange-500 text-white rounded-full text-xs font-bold">
-                                <?= $pendingUsersCount ?>
-                            </span>
-                        <?php endif; ?>
-                    </a>
+                    <div class="relative" id="adminDropdown">
+                        <button 
+                            onclick="toggleAdminMenu(event)" 
+                            class="px-3 py-1 bg-purple-500/80 hover:bg-purple-600 rounded transition-colors flex items-center gap-1 cursor-pointer"
+                            id="adminMenuButton"
+                        >
+                            👑 Admin
+                            <?php if ($pendingUsersCount > 0): ?>
+                                <span class="ml-1 px-2 py-0.5 bg-orange-500 text-white rounded-full text-xs font-bold">
+                                    <?= $pendingUsersCount ?>
+                                </span>
+                            <?php endif; ?>
+                            <span class="ml-1 text-xs transition-transform" id="dropdownArrow">▼</span>
+                        </button>
+                        
+                        <!-- Menu Dropdown -->
+                        <div 
+                            id="adminMenu" 
+                            class="hidden absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-2xl z-50 border-2 border-purple-200 animate-slideDown"
+                        >
+                            <div class="py-2">
+                                <!-- Gerenciar Usuários -->
+                                <a href="admin_users.php" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-purple-50 transition-colors <?= $currentPage === 'admin_users.php' ? 'bg-purple-100 border-l-4 border-purple-600' : '' ?>">
+                                    <span class="text-xl">👥</span>
+                                    <div class="flex-1">
+                                        <div class="font-semibold text-sm">Gerenciar Usuários</div>
+                                        <div class="text-xs text-gray-500">Ativar e administrar</div>
+                                    </div>
+                                    <?php if ($pendingUsersCount > 0): ?>
+                                        <span class="px-2 py-1 bg-orange-500 text-white rounded-full text-xs font-bold">
+                                            <?= $pendingUsersCount ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </a>
+                                
+                                <!-- Editor de Prompts (NOVO!) -->
+                                <a href="admin_prompts.php" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-indigo-50 transition-colors <?= $currentPage === 'admin_prompts.php' ? 'bg-indigo-100 border-l-4 border-indigo-600' : '' ?>">
+                                    <span class="text-xl">🎯</span>
+                                    <div class="flex-1">
+                                        <div class="font-semibold text-sm">Editor de Prompts</div>
+                                        <div class="text-xs text-gray-500">Customizar por disciplina</div>
+                                    </div>
+                                    <span class="px-2 py-1 bg-green-500 text-white rounded-full text-xs font-bold animate-pulse">
+                                        Novo!
+                                    </span>
+                                </a>
+                                
+                                <div class="border-t border-gray-200 my-1"></div>
+                                
+                                <!-- Relatórios Gerais -->
+                                <a href="reports.php" class="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-blue-50 transition-colors">
+                                    <span class="text-xl">📊</span>
+                                    <div class="flex-1">
+                                        <div class="font-semibold text-sm">Relatórios do Sistema</div>
+                                        <div class="text-xs text-gray-500">Visão geral completa</div>
+                                    </div>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
                 <?php endif; ?>
                 
-                <?php if (isset($userSessionsCount) && $userSessionsCount > 0): ?>
+                <!-- Sessões -->
+                <?php if ($userSessionsCount > 0): ?>
                     <a href="sessions.php" class="px-3 py-1 bg-indigo-500/80 hover:bg-indigo-600 rounded transition-colors flex items-center gap-1">
                         📚 Sessões (<?= $userSessionsCount ?>)
                     </a>
                 <?php endif; ?>
                 
+                <!-- Relatórios -->
                 <a href="reports.php" class="px-3 py-1 bg-blue-500/80 hover:bg-blue-600 rounded transition-colors">
                     📊 Relatórios
                 </a>
                 
+                <!-- Logout -->
                 <form method="POST" action="logout.php" class="inline">
                     <button type="submit" class="px-3 py-1 bg-red-500/80 hover:bg-red-600 rounded transition-colors">
                         Sair →
@@ -375,6 +489,7 @@ $userSessionsCount = count($db->getUserSessions($userId, 100));
             </div>
         </div>
     </div>
+
     
     <div class="max-w-4xl mx-auto">
         <?php if ($message): ?>
@@ -878,7 +993,50 @@ $userSessionsCount = count($db->getUserSessions($userId, 100));
                 hideLoading();
             }
         });
-    </script>
+
+        // Função para toggle do menu admin
+        function toggleAdminMenu(event) {
+            event.stopPropagation();
+            const menu = document.getElementById('adminMenu');
+            const arrow = document.getElementById('dropdownArrow');
+            
+            if (menu.classList.contains('hidden')) {
+                menu.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                menu.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
+
+        // Fechar menu ao clicar fora
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('adminDropdown');
+            const menu = document.getElementById('adminMenu');
+            const arrow = document.getElementById('dropdownArrow');
+            
+            if (dropdown && menu && !dropdown.contains(event.target)) {
+                menu.classList.add('hidden');
+                if (arrow) {
+                    arrow.classList.remove('rotate-180');
+                }
+            }
+        });
+
+        // Fechar menu com ESC
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                const menu = document.getElementById('adminMenu');
+                const arrow = document.getElementById('dropdownArrow');
+                if (menu) {
+                    menu.classList.add('hidden');
+                }
+                if (arrow) {
+                    arrow.classList.remove('rotate-180');
+                }
+            }
+        });
+        </script>
 
 </body>
 </html>
