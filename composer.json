@@ -1,0 +1,9 @@
+{
+    "name": "dhelly/sistema-rag-estudos",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "require": {}
+}
