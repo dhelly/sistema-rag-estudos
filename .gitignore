@@ -3,3 +3,5 @@
 .env
 reports/*.html
 old/
+storage/logs/*
+!storage/logs/.gitkeep
