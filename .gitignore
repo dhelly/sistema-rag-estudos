@@ -1,7 +1,55 @@
 *.pem
 *.db
-.env
 reports/*.html
 old/
-storage/logs/*
+
+# Logs
+storage/logs/*.log
 !storage/logs/.gitkeep
+
+# Cache
+storage/cache/*
+!storage/cache/.gitkeep
+
+# Uploads
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+# Reports
+storage/reports/*
+!storage/reports/.gitkeep
+
+# Ambiente
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Dependências
+/vendor/
+/node_modules/
+
+# Banco de dados
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups
+*.bak
+*.backup
+
+# Configurações locais
+config/local.php
+
+# Assets compilados
+public/assets/compiled/
