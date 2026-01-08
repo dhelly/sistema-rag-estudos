@@ -6,6 +6,53 @@
  * Substitui as múltiplas chamadas getConfig() espalhadas pelo código.
  */
 
+// =====================================
+// FUNÇÕES AUXILIARES PARA CONFIGURAÇÃO
+// =====================================
+
+/**
+ * Verifica se está em modo debug
+ */
+function config_isDebug() {
+    return ($_ENV['DEBUG_MODE'] ?? 'false') === 'true';
+}
+
+/**
+ * Converte string de tamanho para bytes
+ */
+function config_parseSize($size) {
+    $unit = strtoupper(substr($size, -1));
+    $value = (int) substr($size, 0, -1);
+    
+    switch ($unit) {
+        case 'G': return $value * 1024 * 1024 * 1024;
+        case 'M': return $value * 1024 * 1024;
+        case 'K': return $value * 1024;
+        default: return (int) $size;
+    }
+}
+
+/**
+ * Encontra arquivo cacert.pem
+ */
+function config_findCacert() {
+    $paths = [
+        ROOT_PATH . '/cacert.pem',
+        'C:/laragon/bin/php/cacert.pem',
+        '/etc/ssl/certs/ca-certificates.crt',
+        '/etc/ssl/certs/ca-bundle.crt',
+        '/usr/local/share/certs/ca-root-nss.crt',
+    ];
+    
+    foreach ($paths as $path) {
+        if (file_exists($path)) {
+            return $path;
+        }
+    }
+    
+    return null;
+}
+
 return [
     // =====================================
     // INFORMAÇÕES DA APLICAÇÃO
@@ -13,7 +60,7 @@ return [
     'name' => 'Sistema RAG de Estudos Inteligente',
     'version' => '3.0.0',
     'environment' => $_ENV['APP_ENV'] ?? 'production', // development, production
-    'debug' => ($_ENV['DEBUG_MODE'] ?? 'false') === 'true',
+    'debug' => config_isDebug(),
     'timezone' => $_ENV['TIMEZONE'] ?? 'America/Sao_Paulo',
     
     // =====================================
@@ -123,7 +170,7 @@ return [
         'anki_export_dir' => STORAGE_PATH . '/exports/anki',
         
         'max_file_size' => $_ENV['MAX_FILE_SIZE'] ?? '50M',
-        'max_file_size_bytes' => self::parseSize($_ENV['MAX_FILE_SIZE'] ?? '50M'),
+        'max_file_size_bytes' => config_parseSize($_ENV['MAX_FILE_SIZE'] ?? '50M'),
         
         'allowed_mimetypes' => [
             'application/pdf',
@@ -143,8 +190,8 @@ return [
     // SEGURANÇA
     // =====================================
     'security' => [
-        'ssl_verify' => !self::isDebug(), // Desativa verificação SSL em dev
-        'cacert_path' => $_ENV['CACERT_PATH'] ?? self::findCacert(),
+        'ssl_verify' => !config_isDebug(), // Desativa verificação SSL em dev
+        'cacert_path' => $_ENV['CACERT_PATH'] ?? config_findCacert(),
         
         'rate_limiting' => [
             'enabled' => true,
@@ -173,7 +220,7 @@ return [
     // =====================================
     'logging' => [
         'enabled' => true,
-        'level' => self::isDebug() ? 'debug' : 'error', // debug, info, warning, error
+        'level' => config_isDebug() ? 'debug' : 'error', // debug, info, warning, error
         'max_files' => 30, // Dias de logs
         'channels' => [
             'app' => STORAGE_PATH . '/logs/app.log',
@@ -204,53 +251,6 @@ return [
         'reports_generation' => true,
         'anki_export' => false, // Futuro
     ],
-    
-    // =====================================
-    // MÉTODOS AUXILIARES
-    // =====================================
-    
-    /**
-     * Verifica se está em modo debug
-     */
-    'isDebug' => function() {
-        return ($_ENV['DEBUG_MODE'] ?? 'false') === 'true';
-    },
-    
-    /**
-     * Converte string de tamanho para bytes
-     */
-    'parseSize' => function($size) {
-        $unit = strtoupper(substr($size, -1));
-        $value = (int) substr($size, 0, -1);
-        
-        switch ($unit) {
-            case 'G': return $value * 1024 * 1024 * 1024;
-            case 'M': return $value * 1024 * 1024;
-            case 'K': return $value * 1024;
-            default: return (int) $size;
-        }
-    },
-    
-    /**
-     * Encontra arquivo cacert.pem
-     */
-    'findCacert' => function() {
-        $paths = [
-            ROOT_PATH . '/cacert.pem',
-            'C:/laragon/bin/php/cacert.pem',
-            '/etc/ssl/certs/ca-certificates.crt',
-            '/etc/ssl/certs/ca-bundle.crt',
-            '/usr/local/share/certs/ca-root-nss.crt',
-        ];
-        
-        foreach ($paths as $path) {
-            if (file_exists($path)) {
-                return $path;
-            }
-        }
-        
-        return null;
-    },
 ];
 
 // =====================================
@@ -301,5 +301,26 @@ class Config {
     public static function all() {
         self::load();
         return self::$config;
+    }
+    
+    /**
+     * Verifica se está em modo debug
+     */
+    public static function isDebug() {
+        return config_isDebug();
+    }
+    
+    /**
+     * Converte string de tamanho para bytes
+     */
+    public static function parseSize($size) {
+        return config_parseSize($size);
+    }
+    
+    /**
+     * Encontra arquivo cacert.pem
+     */
+    public static function findCacert() {
+        return config_findCacert();
     }
 }
